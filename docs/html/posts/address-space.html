@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>深入理解程序地址空间 — ASLR/PIE/虚拟内存</title>
+<link rel="stylesheet" href="../style.css">
+<style>
+  /* Page-specific overrides */
+  .demo-block {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.2rem 1.4rem;
+    margin: 1rem 0;
+    overflow-x: auto;
+  }
+  .demo-block pre {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 0.88rem;
+    line-height: 1.65;
+    color: var(--text);
+  }
+  .demo-label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin-bottom: 0.4rem;
+  }
+  .result-highlight {
+    color: var(--accent-glow);
+    font-weight: 600;
+  }
+  .cmd { color: var(--green); }
+  .out { color: var(--muted); }
+  .val { color: var(--accent-glow); }
+
+  table.concept {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.2rem 0;
+  }
+  table.concept th {
+    background: var(--surface-hi);
+    text-align: left;
+    padding: 0.6rem 1rem;
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: var(--text-hi);
+    border-bottom: 2px solid var(--border-hi);
+  }
+  table.concept td {
+    padding: 0.5rem 1rem;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.9rem;
+  }
+  table.concept tr:hover td {
+    background: var(--surface);
+  }
+
+  .callout {
+    border-left: 3px solid var(--accent);
+    padding: 0.8rem 1.2rem;
+    margin: 1.2rem 0;
+    background: rgba(212,149,40,0.06);
+    border-radius: 0 var(--radius) var(--radius) 0;
+  }
+  .callout-title {
+    font-weight: 700;
+    color: var(--accent);
+    margin-bottom: 0.3rem;
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="../index.html" class="brand">ASM Blog</a>
+  <a href="address-space.html" class="active">地址空间</a>
+</nav>
+
+<h1>深入理解程序地址空间：ASLR、PIE 与虚拟内存</h1>
+
+<p>在使用 ChampSim 进行 Profiling 时，我们遇到一个关键问题：Pin 工具抓取 trace 中的 PC（程序计数器）地址，能否与 <code>objdump -d</code> 反汇编中的地址对应上？</p>
+
+<p>这个问题牵扯出三个核心概念：</p>
+<ul>
+  <li><strong>PIE vs Non-PIE</strong>：程序加载时地址是否固定</li>
+  <li><strong>ASLR</strong>：操作系统是否随机化加载地址</li>
+  <li><strong>虚拟内存</strong>：为什么多个程序可以用同一个地址而不会冲突</li>
+</ul>
+
+<p>本文用可复现的命令行实验，从零开始讲清楚这些概念。</p>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>1. 静态视角：objdump 看到的是什么</h2>
+
+<p>任何可执行文件在编译链接时，链接器会给每一条指令分配一个"期望地址"。</p>
+
+<div class="demo-block">
+<div class="demo-label">编译 PIE 和 Non-PIE 两个版本</div>
+<pre><span class="cmd">$ echo 'int x; int main() { return x; }' | gcc -x c - -o /tmp/demo_pie</span>
+<span class="cmd">$ echo 'int x; int main() { return x; }' | gcc -no-pie -x c - -o /tmp/demo_nopie</span>
+
+<span class="cmd">$ file /tmp/demo_pie</span>
+<span class="out">/tmp/demo_pie:   ELF 64-bit LSB <strong>pie executable</strong></span>
+
+<span class="cmd">$ file /tmp/demo_nopie</span>
+<span class="out">/tmp/demo_nopie: ELF 64-bit LSB <strong>executable</strong></span></pre>
+</div>
+
+<p><code>readelf -h</code> 更精确：</p>
+
+<div class="demo-block">
+<div class="demo-label">查看 ELF 文件类型</div>
+<pre><span class="cmd">$ readelf -h /tmp/demo_pie | grep Type</span>
+<span class="out">  Type:  <span class="val">DYN</span> (Position-Independent Executable file)    ← PIE</span>
+
+<span class="cmd">$ readelf -h /tmp/demo_nopie | grep Type</span>
+<span class="out">  Type:  <span class="val">EXEC</span> (Executable file)                        ← Non-PIE</span></pre>
+</div>
+
+<p><code>objdump -d</code> 查看 main 函数的静态地址：</p>
+
+<div class="demo-block">
+<div class="demo-label">objdump 中的 main 地址</div>
+<pre><span class="cmd">$ objdump -d /tmp/demo_pie | grep '&lt;main&gt;:' | head -1</span>
+<span class="out">  000000000000<span class="val">1129</span> &lt;main&gt;:         ← 小地址，从 0 开始</span>
+
+<span class="cmd">$ objdump -d /tmp/demo_nopie | grep '&lt;main&gt;:' | head -1</span>
+<span class="out">  0000000000<span class="val">401106</span> &lt;main&gt;:         ← 固定地址 0x401106</span></pre>
+</div>
+
+<div class="callout">
+<div class="callout-title">关键差异</div>
+PIE 程序的 objdump 地址从 <code>0x1000</code> 左右开始（接近 0）；Non-PIE 程序固定在 <code>0x400000</code> 附近开始。这只是"期望"——运行时不一定是这个地址。
+</div>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>2. 运行时视角：真实加载地址</h2>
+
+<p>写一个小程序，让它自己打印自己 main 函数的运行时地址：</p>
+
+<div class="demo-block">
+<div class="demo-label">show_addr.c — 自反观察程序</div>
+<pre>#include &lt;stdio.h&gt;
+int main(void) {
+    printf("运行时 main 的地址: %p\n", (void*)main);
+    return 0;
+}</pre>
+</div>
+
+<p>分别编译为 PIE 和 Non-PIE，各跑 5 次：</p>
+
+<div class="demo-block">
+<div class="demo-label">PIE 版本 — 每次不同</div>
+<pre><span class="cmd">$ for i in 1 2 3 4 5; do /tmp/show_pie; done</span>
+运行时 main 的地址: <span class="result-highlight">0x5b23111ce149</span>
+运行时 main 的地址: <span class="result-highlight">0x591465e92149</span>      ← 每次不同!
+运行时 main 的地址: <span class="result-highlight">0x6066d4540149</span>
+运行时 main 的地址: <span class="result-highlight">0x5691fa362149</span>
+运行时 main 的地址: <span class="result-highlight">0x5df41b7d1149</span></pre>
+</div>
+
+<div class="demo-block">
+<div class="demo-label">Non-PIE 版本 — 永远相同</div>
+<pre><span class="cmd">$ for i in 1 2 3 4 5; do /tmp/show_nopie; done</span>
+运行时 main 的地址: <span class="result-highlight">0x401136</span>
+运行时 main 的地址: <span class="result-highlight">0x401136</span>           ← 永远相同!
+运行时 main 的地址: <span class="result-highlight">0x401136</span>
+运行时 main 的地址: <span class="result-highlight">0x401136</span>
+运行时 main 的地址: <span class="result-highlight">0x401136</span></pre>
+</div>
+
+<p>PIE 程序每次加载到不同的随机地址（<code>0x5b23...</code> → <code>0x5914...</code> → <code>0x6066...</code>），Non-PIE 程序永远在 <code>0x401136</code>。</p>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>3. 为什么会这样：PIE 与 ASLR</h2>
+
+<h3>3.1 PIE（Position-Independent Executable）</h3>
+
+<p>PIE 是一种编译方式。编译时，所有代码使用<strong>相对寻址</strong>而非绝对地址。这样无论程序被加载到内存中的哪个位置，都能正确运行。</p>
+
+<div class="demo-block">
+<div class="demo-label">绝对寻址 vs 相对寻址</div>
+<pre>Non-PIE:  call 0x401200      ← 写死了目标地址
+PIE:      call *%rip+0x1234  ← 相对于当前指令位置计算</pre>
+</div>
+
+<p>现代 Linux 发行版的 gcc 默认编译 PIE 程序（安全考虑）。</p>
+
+<h3>3.2 ASLR（Address Space Layout Randomization）</h3>
+
+<p>ASLR 是操作系统内核的特性，控制在加载程序时是否随机化地址：</p>
+
+<div class="demo-block">
+<div class="demo-label">查看当前 ASLR 设置</div>
+<pre><span class="cmd">$ cat /proc/sys/kernel/randomize_va_space</span>
+<span class="val">2</span>
+
+0 = 关闭全部随机化
+1 = 只随机化共享库和栈
+2 = 全部随机化（包括 PIE 主程序）</pre>
+</div>
+
+<p><strong>PIE 需要 ASLR 来发挥效果</strong>：PIE 使程序"可以"被加载到任意地址，ASLR 实际"执行"随机化。Non-PIE 程序不受 ASLR 影响——即使 ASLR=2，Non-PIE 程序仍然加载到固定地址。</p>
+
+<h3>3.3 关系总结</h3>
+
+<table class="concept">
+<tr><th>编译方式</th><th>objdump 地址</th><th>运行时地址（ASLR=2）</th><th>运行时地址（ASLR=0）</th></tr>
+<tr><td><code>gcc</code>（PIE）</td><td><code>0x1129</code></td><td>每次随机，如 <code>0x5b...1149</code></td><td>固定（但不同于 objdump）</td></tr>
+<tr><td><code>gcc -no-pie</code></td><td><code>0x401136</code></td><td><strong>永远</strong> <code>0x401136</code></td><td><strong>永远</strong> <code>0x401136</code></td></tr>
+</table>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>4. 高地址 vs 低地址：谁在程序的地址空间里</h2>
+
+<p>一个进程的虚拟地址空间里不只有主程序，还有动态链接器（ld.so）、C 库（libc）等共享库，以及栈。它们分布在不同的地址区域。</p>
+
+<p>用 Pin trace 10M 条指令来看 perlbench 程序：</p>
+
+<div class="demo-block">
+<div class="demo-label">10M 指令 trace 中 PC 地址的分布</div>
+<pre><strong>前 100K 条指令（程序启动早期）：</strong>
+  0x<span class="val">79341d</span>xxxxxx  : 100,000 PCs    ← 全部在 ld.so 的动态链接器代码中!
+
+<strong>后 100K 条指令（进入 main 之后）：</strong>
+  0x<span class="val">00</span>xxxxxx        :  86,565 PCs    ← 主程序代码（低地址）
+  0x<span class="val">793408</span>xxxxxx    :  13,435 PCs    ← 共享库代码（高地址）</pre>
+</div>
+
+<p>为什么前几百万条指令都在 ld.so 里？因为程序启动时，内核先加载 <code>ld-linux-x86-64.so.2</code>（动态链接器），由它负责：</p>
+
+<ol>
+  <li>加载依赖的 .so 文件（libc 等）</li>
+  <li>做符号重定位</li>
+  <li>最后才跳转到 main</li>
+</ol>
+
+<p>这个启动过程本身就消耗了几百万到上千万条指令。</p>
+
+<div class="callout">
+<div class="callout-title">通用规律 — 地址空间布局</div>
+<pre style="margin-top:0.4rem;font-size:0.85rem;">
+0x0000000000400000 - 0x0000000001000000 : 主程序（Non-PIE 固定在这里）
+0x55xxxxxxxxxxxxxx - 0x56xxxxxxxxxxxxxx : 主程序（PIE，地址随机）
+0x7fxxxxxxxxxxxxxx - 0x7fxxxxxxxxxxxxxx : 共享库（libc, libm, ...）
+0x7ffff7fc000000+                        : ld.so（动态链接器）
+0x7fffffffxxxx                           : 栈
+</pre>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>5. 不冲突的秘密：虚拟内存</h2>
+
+<p>Non-PIE 程序都固定在 <code>0x401000</code> 开始加载。如果同时跑 3 个，它们的代码段都在同一个地址——不会冲突吗？</p>
+
+<h3>5.1 实验验证</h3>
+
+<div class="demo-block">
+<div class="demo-label">三个 Non-PIE 进程同时运行</div>
+<pre><span class="cmd">$ echo 'int main() { usleep(100000); return 0; }' | gcc -no-pie -x c - -o /tmp/demo</span>
+<span class="cmd">$ /tmp/demo & /tmp/demo & /tmp/demo &</span>
+<span class="cmd">$ for pid in $(jobs -p); do cat /proc/$pid/maps | grep 'r-xp.*demo'; done</span>
+
+PID 623369: <span class="result-highlight">00401000</span>-00402000
+PID 623370: <span class="result-highlight">00401000</span>-00402000    ← 三个进程，完全相同的代码段地址!
+PID 623371: <span class="result-highlight">00401000</span>-00402000</pre>
+</div>
+
+<p>三个进程的代码都在 <code>0x00401000-0x00402000</code>，却能同时正确运行。</p>
+
+<h3>5.2 原理：MMU 做翻译</h3>
+
+<p>CPU 内部有一个硬件叫 <strong>MMU</strong>（Memory Management Unit），负责将每个进程的<strong>虚拟地址</strong>翻译为<strong>物理地址</strong>。</p>
+
+<div class="demo-block">
+<div class="demo-label">MMU 地址翻译示意</div>
+<pre>进程 A 执行 0x401106 时:
+  0x401106 (虚拟) ── MMU 查页表 ──→ <span class="val">0x1a3f0106</span> (物理 RAM)
+
+进程 B 执行 0x401106 时:
+  0x401106 (虚拟) ── MMU 查页表 ──→ <span class="val">0x2b8c0106</span> (物理 RAM)
+                                       ↑
+                               完全不同的物理内存页!</pre>
+</div>
+
+<p>每个进程有自己独立的<strong>页表</strong>（Page Table），MMU 为不同进程将相同的虚拟地址映射到不同的物理页。每当 CPU 切换进程时（context switch），操作系统会切换 MMU 使用的页表指针（<code>CR3</code> 寄存器）。切换后，同一虚拟地址自动指向新进程的物理内存。</p>
+
+<h3>5.3 类比</h3>
+
+<div class="callout">
+<div class="callout-title">门牌号的类比</div>
+<pre style="margin-top:0.4rem;font-size:0.85rem;">
+小区 A 的 1-101 室     ← 进程 A 的 0x401000
+小区 B 的 1-101 室     ← 进程 B 的 0x401000
+小区 C 的 1-101 室     ← 进程 C 的 0x401000
+
+门牌号一样，但邮递员（MMU）知道它们在城市的完全不同的经纬度。
+</pre>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>6. 实际观察工具速查</h2>
+
+<table class="concept">
+<tr><th>目的</th><th>命令</th></tr>
+<tr>
+  <td>查看程序类型</td>
+  <td><code>file /path/to/binary</code><br><code>readelf -h /path/to/binary | grep Type</code></td>
+</tr>
+<tr>
+  <td>查看静态反汇编地址</td>
+  <td><code>objdump -d /path/to/binary | head -20</code><br>地址 <code>0x40xxxx</code> → Non-PIE；地址 <code>0x1xxx</code> → PIE</td>
+</tr>
+<tr>
+  <td>查看运行时加载地址</td>
+  <td><code>/path/to/binary &<br>cat /proc/$!/maps | grep 'r-xp' | head -5</code></td>
+</tr>
+<tr>
+  <td>查看 ASLR 状态</td>
+  <td><code>cat /proc/sys/kernel/randomize_va_space</code></td>
+</tr>
+<tr>
+  <td>查看进程完整内存布局</td>
+  <td><code>cat /proc/&lt;PID&gt;/maps</code></td>
+</tr>
+</table>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>7. 对 ChampSim Profiling 的意义</h2>
+
+<p>在我们的 Pipeline 中：</p>
+<ol>
+  <li>SPEC2006 程序用 <code>-no-pie</code> 编译 → Non-PIE 二进制</li>
+  <li><code>objdump -d</code> 的地址 = 运行时地址（Non-PIE 固定加载）</li>
+  <li>Pin tracer 抓到的 PC 可以直接与 objdump 反汇编匹配</li>
+  <li>SimPoints 是<strong>基于指令序号</strong>的（第 N 亿条指令），与 PC 地址无关</li>
+</ol>
+
+<div class="demo-block">
+<div class="demo-label">实际验证结果（10M 指令 trace，perlbench）</div>
+<pre>从 trace 中提取的 Load PC: <span class="result-highlight">714</span> 个
+与 objdump 反汇编匹配:     <span class="result-highlight">714</span> 个
+匹配率:                    <span class="result-highlight">100%</span></pre>
+</div>
+
+<p>Pipeline 的 PC 匹配问题得到彻底解决。</p>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>总结</h2>
+
+<table class="concept">
+<tr><th>概念</th><th>一句话解释</th></tr>
+<tr><td>PIE</td><td>代码使用相对寻址，可以被加载到任意位置</td></tr>
+<tr><td>Non-PIE</td><td>代码使用绝对地址，固定在 0x400000 加载</td></tr>
+<tr><td>ASLR</td><td>内核在加载时随机化地址（PIE 生效的前提）</td></tr>
+<tr><td>objdump 地址</td><td>链接器分配的"期望"地址</td></tr>
+<tr><td>运行时地址</td><td>加 <code>-no-pie</code> 则与 objdump 一致，否则被 ASLR 随机化</td></tr>
+<tr><td>高地址 / 低地址</td><td>低地址 = 主程序，高地址（0x7f...）= 共享库和 ld.so</td></tr>
+<tr><td>虚拟内存</td><td>每个进程有独立的地址空间，同地址不冲突</td></tr>
+<tr><td>MMU</td><td>CPU 硬件，每时每刻把虚拟地址翻译为物理地址</td></tr>
+</table>
+
+<footer>ASM Blog — 深入理解程序地址空间</footer>
+</body>
+</html>
