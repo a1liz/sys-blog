@@ -1,0 +1,4 @@
+repo: agent-bootstrap
+version: 0218e97
+updated: 2026-05-11T18:59:42Z
+modules: docs-dual-format
