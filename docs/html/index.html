@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ASM Blog — Sys 技术细节</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .hero {
+    margin: 1rem 0 2.5rem;
+  }
+  .hero h1 {
+    margin-bottom: 0.3rem;
+  }
+  .hero .tagline {
+    color: var(--muted);
+    font-size: 0.95rem;
+    line-height: 1.7;
+    max-width: 640px;
+  }
+  .post-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+    margin: 1.5rem 0;
+  }
+  .post-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 1.1rem 1.3rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    transition: border-color var(--transition), transform var(--transition), box-shadow var(--transition);
+  }
+  .post-card:hover {
+    border-color: var(--border-hi);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 24px rgba(0,0,0,0.2), 0 0 0 1px rgba(212,149,40,0.04);
+  }
+  .post-card-left {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    min-width: 0;
+  }
+  .post-title {
+    font-weight: 650;
+    font-size: 1.02rem;
+    color: var(--text-hi);
+    text-decoration: none;
+    transition: color var(--transition);
+  }
+  .post-title:hover {
+    color: var(--accent-glow);
+  }
+  .post-summary {
+    font-size: 0.85rem;
+    color: var(--muted);
+    line-height: 1.55;
+  }
+  .post-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-shrink: 0;
+  }
+  .post-tag {
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 0.15em 0.55em;
+    border-radius: 10px;
+    background: var(--blue-dim);
+    color: var(--blue);
+    border: 1px solid rgba(88,152,204,0.2);
+    white-space: nowrap;
+  }
+  .post-date {
+    font-size: 0.78rem;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .section-heading {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin: 2rem 0 0.5rem;
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <span class="brand">ASM Blog</span>
+</nav>
+
+<div class="hero">
+  <h1>Sys 技术细节</h1>
+  <p class="tagline">
+    系统底层、内核、虚拟内存、网络协议、性能调优 ——
+    用可复现的实验和代码，理解计算机系统的工作原理。
+  </p>
+</div>
+
+<div class="section-heading">文章</div>
+
+<div class="post-list">
+
+  <div class="post-card">
+    <div class="post-card-left">
+      <a href="posts/address-space.html" class="post-title">深入理解程序地址空间：ASLR、PIE 与虚拟内存</a>
+      <span class="post-summary">
+        PIE vs Non-PIE 的本质区别、ASLR 的生效条件、MMU 如何让多个进程共享同一虚拟地址而不冲突 —— 附可复现命令行实验。
+      </span>
+    </div>
+    <div class="post-meta">
+      <span class="post-tag">linux</span>
+    </div>
+  </div>
+
+</div>
+
+<footer>ASM Blog — Sys 技术细节知识库</footer>
+</body>
+</html>
