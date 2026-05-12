@@ -111,6 +111,18 @@
 
   <div class="post-card">
     <div class="post-card-left">
+      <a href="posts/profiling-amat.html" class="post-title">AMAT 如何揭开 CPU 预取的秘密：从 Profiling 到 Prefetcher 选择</a>
+      <span class="post-summary">
+        通过 ChampSim 对 400.perlbench 的逐指令级 profiling，用 AMAT 在 14 种 prefetcher 中为每个 Load PC 选出最优策略。附带真实汇编级案例：next_line 赢 46%、ip_stride 逆袭、no 反而最好。
+      </span>
+    </div>
+    <div class="post-meta">
+      <span class="post-tag">performance</span>
+    </div>
+  </div>
+
+  <div class="post-card">
+    <div class="post-card-left">
       <a href="posts/address-space.html" class="post-title">深入理解程序地址空间：ASLR、PIE 与虚拟内存</a>
       <span class="post-summary">
         PIE vs Non-PIE 的本质区别、ASLR 的生效条件、MMU 如何让多个进程共享同一虚拟地址而不冲突 —— 附可复现命令行实验。

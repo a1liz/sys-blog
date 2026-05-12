@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AMAT 如何揭开 CPU 预取的秘密 — 从 ChampSim Profiling 到 Prefetcher 选择</title>
+<link rel="stylesheet" href="../style.css">
+<style>
+  .hero { margin: 1rem 0 2rem; }
+  .hero .tagline { color: var(--muted); font-size: .95rem; line-height: 1.7; max-width: 700px; }
+
+  .insight-row {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: .85rem; margin: 1.5rem 0;
+  }
+  .insight-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 1rem 1.2rem;
+    transition: border-color var(--transition), transform var(--transition), box-shadow var(--transition);
+  }
+  .insight-card:hover {
+    border-color: var(--border-hi);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 24px rgba(0,0,0,0.25);
+  }
+  .insight-card .ic-num {
+    font-family: var(--font-mono);
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--accent-glow);
+  }
+  .insight-card h4 { margin: .3rem 0 .15rem; font-size: .92rem; color: var(--text-hi); }
+  .insight-card p { font-size: .82rem; color: var(--muted); line-height: 1.6; margin: 0; }
+
+  .example-block {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    margin: 1.5rem 0;
+    overflow: hidden;
+    transition: border-color var(--transition), box-shadow var(--transition);
+  }
+  .example-block:hover {
+    border-color: var(--border-hi);
+    box-shadow: 0 4px 28px rgba(0,0,0,0.25);
+  }
+  .example-hd {
+    background: var(--surface-hi);
+    padding: .75rem 1.2rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .example-title {
+    font-weight: 650;
+    font-size: .95rem;
+    color: var(--text-hi);
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+  }
+  .example-badge {
+    font-size: .7rem;
+    font-weight: 700;
+    padding: .2em .6em;
+    border-radius: 10px;
+    white-space: nowrap;
+  }
+  .badge-win   { background: var(--green-dim); color: var(--green); border: 1px solid rgba(122,158,72,0.2); }
+  .badge-gap   { background: var(--red); color: #f0a8a0; border: 1px solid rgba(197,85,66,0.2); font-family: var(--font-mono); }
+  .example-body { padding: 1.2rem; }
+  .asm-box {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem 1.3rem;
+    margin-bottom: 1rem;
+    font-family: var(--font-mono);
+    font-size: .82rem;
+    line-height: 1.6;
+    overflow-x: auto;
+    position: relative;
+  }
+  .asm-box::before {
+    content: 'x86-64 Assembly';
+    position: absolute;
+    top: -1px; right: 1rem;
+    font-size: .65rem;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--muted);
+    background: var(--code-bg);
+    padding: .15em .6em;
+    border: 1px solid var(--border);
+    border-top: none;
+    border-radius: 0 0 4px 4px;
+    font-family: var(--font-body);
+  }
+  .asm-load {
+    color: var(--accent-glow);
+    background: rgba(212,149,40,0.08);
+    display: inline-block;
+    width: 100%;
+    padding: .12em 0;
+    margin: .08em 0;
+    border-left: 3px solid var(--accent);
+    padding-left: .5rem;
+  }
+  .amat-bar-wrap { display: flex; flex-direction: column; gap: .35rem; margin: .8rem 0; }
+  .amat-bar-row {
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+    font-size: .82rem;
+  }
+  .amat-bar-label {
+    font-family: var(--font-mono);
+    font-size: .78rem;
+    color: var(--muted);
+    min-width: 120px;
+    text-align: right;
+    white-space: nowrap;
+  }
+  .amat-bar-track {
+    flex: 1;
+    height: 20px;
+    background: var(--code-bg);
+    border-radius: 3px;
+    overflow: hidden;
+    position: relative;
+    border: 1px solid rgba(255,255,255,0.03);
+  }
+  .amat-bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width .6s ease;
+    display: flex;
+    align-items: center;
+    padding-left: .5rem;
+    font-size: .7rem;
+    font-weight: 600;
+    color: var(--text-hi);
+  }
+  .amat-best .amat-bar-fill { background: linear-gradient(90deg, rgba(122,158,72,0.4), rgba(122,158,72,0.25)); border: 1px solid rgba(122,158,72,0.3); }
+  .amat-other .amat-bar-fill { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.04); }
+  .amat-worse .amat-bar-fill { background: rgba(197,85,66,0.15); border: 1px solid rgba(197,85,66,0.15); }
+  .amat-bar-val {
+    font-family: var(--font-mono);
+    font-size: .75rem;
+    color: var(--text);
+    min-width: 50px;
+    text-align: right;
+    white-space: nowrap;
+  }
+  .amat-bar-mark {
+    font-size: .65rem;
+    color: var(--accent);
+    min-width: 60px;
+    text-align: left;
+  }
+
+  .why-box {
+    background: var(--surface);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 var(--radius) var(--radius) 0;
+    padding: .85rem 1.2rem;
+    margin: 1rem 0;
+    font-size: .88rem;
+    color: var(--text);
+    line-height: 1.7;
+  }
+  .why-box strong { color: var(--accent-glow); }
+
+  .pipe-flow {
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 0;
+    flex-wrap: wrap;
+    padding: 1.5rem .5rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    margin: 1.5rem 0;
+    font-family: var(--font-mono);
+    font-size: .78rem;
+    overflow-x: auto;
+  }
+  .pipe-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: var(--surface-hi);
+    border: 1px solid var(--border-hi);
+    border-radius: var(--radius);
+    padding: .7rem .9rem;
+    min-width: 110px;
+    text-align: center;
+    transition: border-color var(--transition), box-shadow var(--transition);
+  }
+  .pipe-step:hover { border-color: var(--accent); box-shadow: 0 0 16px rgba(212,149,40,0.08); }
+  .pipe-step .ps-label { font-weight: 650; color: var(--text-hi); font-size: .82rem; margin-bottom: .2rem; }
+  .pipe-step .ps-desc  { color: var(--muted); font-size: .68rem; line-height: 1.4; }
+  .pipe-arrow {
+    display: flex; align-items: center;
+    color: var(--accent);
+    font-size: 1.1rem;
+    padding: 0 .4rem;
+    flex-shrink: 0;
+    margin-top: .5rem;
+    font-family: var(--font-body);
+  }
+
+  .data-sample {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem 1.3rem;
+    margin: 1rem 0;
+    font-family: var(--font-mono);
+    font-size: .78rem;
+    line-height: 1.5;
+    overflow-x: auto;
+    color: var(--text);
+  }
+  .data-sample .key { color: var(--blue); }
+  .data-sample .str { color: var(--green); }
+  .data-sample .num { color: var(--accent-glow); }
+
+  table.conc-table { font-size: .87rem; }
+  table.conc-table td:first-child { font-weight: 600; color: var(--text-hi); white-space: nowrap; }
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="../index.html" class="brand">ASM Blog</a>
+  <a href="profiling-amat.html" class="active">AMAT × Prefetch</a>
+  <a href="address-space.html">地址空间</a>
+</nav>
+
+<div class="hero">
+  <h1>AMAT 如何揭开 CPU 预取的秘密</h1>
+  <p class="tagline">
+    从 ChampSim 逐指令级 Profiling 到 Prefetcher 选择 ——
+    通过 AMAT 在 14 种预取配置中为 4,202 个 Load PC 选出最优策略。
+    附带 <code>400.perlbench</code> 真实汇编级案例，解释为什么 <code>next_line</code> 能赢 46%，而 <code>ip_stride</code> 在某些指针链上比什么都不做还差。
+  </p>
+</div>
+
+<!-- ── 核心理念卡片 ───────────────────────────────── -->
+<div class="insight-row">
+  <div class="insight-card">
+    <div class="ic-num">1</div>
+    <h4>每个 Load PC 的访存模式不同</h4>
+    <p>顺序扫描数组、指针链跳转、固定步长遍历结构体 —— 单一 prefetcher 无法适应所有模式。</p>
+  </div>
+  <div class="insight-card">
+    <div class="ic-num">2</div>
+    <h4>AMAT 是最小控制变量实验</h4>
+    <p>同一 trace × 不同 prefetcher → AMAT 差异纯粹来自 hit/miss 比例，AMAT 最低者为最优。</p>
+  </div>
+  <div class="insight-card">
+    <div class="ic-num">3</div>
+    <h4>静态度量 → 动态行为 可学习</h4>
+    <p>编译后的机器码在同一输入下总是走同样的路径。汇编上下文 → 最优 prefetcher 的映射是 ML 可学的。</p>
+  </div>
+</div>
+
+<!-- ── AMAT 是什么 ─────────────────────────────────── -->
+<h2>AMAT 是什么</h2>
+
+<p><strong>AMAT（Average Memory Access Time）</strong> 是一条 load 指令每次访问内存的平均延迟。</p>
+
+<div class="data-sample" style="text-align:center; padding: 1.5rem;">
+  <span style="font-size:1.1rem;">AMAT = (hit_count × HIT_LATENCY + miss_count × FILL_LATENCY) / access_count</span>
+</div>
+
+<table>
+<tr><th>结果</th><th>延迟</th></tr>
+<tr><td>Cache Hit</td><td><code>HIT_LATENCY</code>（几个 cycle）</td></tr>
+<tr><td>Cache Miss</td><td><code>FILL_LATENCY</code>（几十到上百 cycle）</td></tr>
+</table>
+
+<p>Prefetcher 的价值就是把 <strong>Miss 变成 Hit</strong>。AMAT 越低 → hit 越多 → 程序跑得越快。</p>
+
+<!-- ── Profiling 流程 ──────────────────────────────── -->
+<h2>Profiling 是怎么测得 AMAT 的</h2>
+
+<div class="pipe-flow">
+  <div class="pipe-step">
+    <div class="ps-label">Stage 3</div>
+    <div class="ps-desc">Intel PIN<br>采集 Trace</div>
+  </div>
+  <div class="pipe-arrow">→</div>
+  <div class="pipe-step">
+    <div class="ps-label">Stage 4</div>
+    <div class="ps-desc">14× ChampSim<br>各跑一遍 Trace</div>
+  </div>
+  <div class="pipe-arrow">→</div>
+  <div class="pipe-step">
+    <div class="ps-label">Cache::try_hit</div>
+    <div class="ps-desc">每条 Load 记录<br>PC + hit/miss + latency</div>
+  </div>
+  <div class="pipe-arrow">→</div>
+  <div class="pipe-step">
+    <div class="ps-label">Profiler::flush</div>
+    <div class="ps-desc">算 per-PC<br>avg_amat</div>
+  </div>
+  <div class="pipe-arrow">→</div>
+  <div class="pipe-step">
+    <div class="ps-label">Stage 6</div>
+    <div class="ps-desc">跨 Prefetcher<br>选最低 AMAT</div>
+  </div>
+</div>
+
+<p>ChampSim 是一款 <strong>cycle-level</strong> 缓存模拟器。编译时加 <code>-DHINT_PROFILING</code>，在 <code>CACHE::try_hit()</code> 路径上嵌入 profiler：</p>
+
+<pre>// src/cache.cc — 每一次 load 经过这里
+bool CACHE::try_hit(const tag_lookup_type& handle_pkt) {
+  // ... tag 查找，判定 hit/miss ...
+
+  uint64_t latency = hit ? HIT_LATENCY.count() : FILL_LATENCY.count();
+  PROFILER_RECORD_ACCESS(handle_pkt.ip, /*repl*/0, /*pref*/0, hit, latency);
+
+  // ... 然后才触发 prefetcher，做预取 ...
+}</pre>
+
+<p>程序跑完 100M 条指令后，profiler flush 每个 PC 的累计统计：</p>
+
+<pre>// src/profiler.cc — flush 时算 AMAT
+double avg_amat = rec.total_latency / rec.access_count;  // 就是 AMAT
+
+// 输出 JSONL
+{"pc":"0x463148","access_count":127,"hit_count":98,"miss_count":29,
+ "total_latency":50592,"avg_amat":398.4,"hit_ratio":0.772,...}</pre>
+
+<!-- ── 全局分布 ───────────────────────────────────── -->
+<h2>400.perlbench：4,202 个 PC × 14 种 Prefetcher</h2>
+
+<table>
+<tr><th>Prefetcher</th><th>最优 PC 数</th><th>占比</th><th>擅长模式</th></tr>
+<tr><td><code>va_ampm_lite</code></td><td>2,439</td><td>58.0%</td><td>全局历史 + 地址关联的复杂访存</td></tr>
+<tr><td><code>no</code></td><td>767</td><td>18.3%</td><td>随机访存 / 数据已在缓存中</td></tr>
+<tr><td><code>next_line</code></td><td>498</td><td>11.9%</td><td>顺序 / 连续访存</td></tr>
+<tr><td><code>ip_stride</code></td><td>209</td><td>5.0%</td><td>固定步长（PC 级历史）</td></tr>
+<tr><td><code>ampm</code></td><td>202</td><td>4.8%</td><td>全局访存流模式匹配</td></tr>
+<tr><td><code>stride</code></td><td>87</td><td>2.1%</td><td>PC 级步长（传统方式）</td></tr>
+</table>
+
+<!-- ── 案例 1 ──────────────────────────────────────── -->
+<h2>案例 1：next_line 大胜 46% — 结构体字段的连续访问</h2>
+
+<div class="example-block">
+  <div class="example-hd">
+    <span class="example-title">
+      <span class="badge badge-module">Perl_pp_match</span>
+      PC <code>0x463148</code>
+    </span>
+    <span class="example-badge badge-gap">AMAT Gap +46%</span>
+  </div>
+  <div class="example-body">
+    <div class="asm-box">
+<div>0x46313c: mov    %rax,0x78(%rsp)</div>
+<div>0x463141: xor    %eax,%eax</div>
+<div>0x463143: movzbl 0x24(%r8),%eax     <span style="color:var(--muted)">← 结构体字段 +0x24</span></div>
+<div class="asm-load">>>>     mov    0x50(%r8),%r14     <span style="color:var(--muted)">← 结构体字段 +0x50 (LOAD)</span></div>
+<div>0x46314c: mov    %eax,%edx</div>
+<div>0x46314e: and    $0x3,%edx</div>
+    </div>
+
+    <p style="color:var(--muted); font-size:.85rem;"><code>r8</code> 指向匹配引擎状态结构体。两个字段偏移递增 <code>+0x2C</code>——同一结构体内部的相邻成员。</p>
+
+    <div class="amat-bar-wrap">
+      <div class="amat-bar-row amat-best">
+        <span class="amat-bar-label">next_line:1</span>
+        <span class="amat-bar-track"><span class="amat-bar-fill" style="width:69%"></span></span>
+        <span class="amat-bar-val">398.4</span>
+        <span class="amat-bar-mark">← 最优</span>
+      </div>
+      <div class="amat-bar-row amat-worse">
+        <span class="amat-bar-label">no:1</span>
+        <span class="amat-bar-track"><span class="amat-bar-fill" style="width:100%"></span></span>
+        <span class="amat-bar-val">580.4</span>
+        <span class="amat-bar-mark">+46%</span>
+      </div>
+      <div class="amat-bar-row amat-other">
+        <span class="amat-bar-label">ip_stride:2</span>
+        <span class="amat-bar-track"><span class="amat-bar-fill" style="width:100%"></span></span>
+        <span class="amat-bar-val">600.3</span>
+      </div>
+      <div class="amat-bar-row amat-other">
+        <span class="amat-bar-label">stride:1</span>
+        <span class="amat-bar-track"><span class="amat-bar-fill" style="width:100%"></span></span>
+        <span class="amat-bar-val">673.4</span>
+      </div>
+    </div>
+
+    <div class="why-box">
+      <strong>为什么？</strong> 第一次 miss 后 <code>next_line</code> 把紧接着的下一行预取进来，后续 <code>+0x50</code> 直接命中。而 <code>no</code> 每次 miss 都等完整 fill latency。差距高达 182 cycle。
+    </div>
+  </div>
+</div>
+
+<!-- ── 案例 2 ──────────────────────────────────────── -->
+<h2>案例 2：next_line 再胜 41% — 正则引擎的循环状态检查</h2>
+
+<div class="example-block">
+  <div class="example-hd">
+    <span class="example-title">
+      <span class="badge badge-module">S_regmatch</span>
+      PC <code>0x4898cb</code>
+    </span>
+    <span class="example-badge badge-gap">AMAT Gap +41%</span>
+  </div>
+  <div class="example-body">
+    <div class="asm-box">
+<div>0x4898bf: mov    %r14,%rcx</div>
+<div>0x4898c2: mov    %eax,0x18(%rsp)</div>
+<div>0x4898c6: jmp    488378 &lt;S_regmatch+0x118&gt;</div>
+<div class="asm-load">>>>     cmp    0x9753e(%rip),%r14   <span style="color:var(--muted)">← 对比 PL_regeol 边界 (LOAD)</span></div>
+<div>0x4898d2: jb     488395 &lt;S_regmatch+0x135&gt;</div>
+<div>0x4898d8: jmp    488375 &lt;S_regmatch+0x115&gt;</div>
+    </div>
+
+    <p style="color:var(--muted); font-size:.85rem;">Perl 正则引擎核心匹配循环。每次迭代顺序访问全局状态变量 <code>PL_regeol</code>。</p>
+
+    <div class="amat-bar-wrap">
+      <div class="amat-bar-row amat-best">
+        <span class="amat-bar-label">next_line:1</span>
+        <span class="amat-bar-track"><span class="amat-bar-fill" style="width:71%"></span></span>
+        <span class="amat-bar-val">375.0</span>
+        <span class="amat-bar-mark">← 最优</span>
+      </div>
+      <div class="amat-bar-row amat-worse">
+        <span class="amat-bar-label">ampm:1</span>
+        <span class="amat-bar-track"><span class="amat-bar-fill" style="width:100%"></span></span>
+        <span class="amat-bar-val">527.0</span>
+        <span class="amat-bar-mark">+41%</span>
+      </div>
+      <div class="amat-bar-row amat-other">
+        <span class="amat-bar-label">va_ampm_lite:1</span>
+        <span class="amat-bar-track"><span class="amat-bar-fill" style="width:100%"></span></span>
+        <span class="amat-bar-val">527.0</span>
+      </div>
+    </div>
+
+    <div class="why-box">
+      <strong>为什么？</strong> 正则引擎主循环是高度可预测的顺序流。<code>next_line</code> 的最简策略完美匹配。复杂的 <code>ampm</code> 和 <code>va_ampm_lite</code> 反而因为过度预取或错误预测浪费了带宽。
+    </div>
+  </div>
+</div>
+
+<!-- ── 案例 3 ──────────────────────────────────────── -->
+<h2>案例 3：ip_stride 胜出 — 方法分发的指针链跳转</h2>
+
+<div class="example-block">
+  <div class="example-hd">
+    <span class="example-title">
+      <span class="badge badge-core">Perl_pp_method_named</span>
+      PC <code>0x4689ec</code>
+    </span>
+    <span class="example-badge badge-gap">AMAT Gap +14%</span>
+  </div>
+  <div class="example-body">
+    <div class="asm-box">
+<div>0x4689e1: mov    0xb7db0(%rip),%rax   <span style="color:var(--muted)">← PL_op 全局表</span></div>
+<div>0x4689e8: mov    0x28(%rax),%rbp      <span style="color:var(--muted)">← op→op_next (+0x28)</span></div>
+<div class="asm-load">>>>     mov    0x0(%rbp),%rax       <span style="color:var(--muted)">← op_next→op_type (+0x00, LOAD)</span></div>
+<div>0x4689f0: mov    0x18(%rax),%rax      <span style="color:var(--muted)">← op_type→op_ppaddr (+0x18)</span></div>
+<div>0x4689f4: mov    %eax,0x4(%rsp)</div>
+    </div>
+
+    <p style="color:var(--muted); font-size:.85rem;">Perl 的方法分发链：偏移量不断变化——<code>+0x28</code> → <code>+0x00</code> → <code>+0x18</code>——不是顺序的。</p>
+
+    <div class="amat-bar-wrap">
+      <div class="amat-bar-row amat-best">
+        <span class="amat-bar-label">ip_stride:2</span>
+        <span class="amat-bar-track"><span class="amat-bar-fill" style="width:85%"></span></span>
+        <span class="amat-bar-val">411.7</span>
+        <span class="amat-bar-mark">← 最优</span>
+      </div>
+      <div class="amat-bar-row amat-worse">
+        <span class="amat-bar-label">no:1</span>
+        <span class="amat-bar-track"><span class="amat-bar-fill" style="width:96%"></span></span>
+        <span class="amat-bar-val">468.0</span>
+        <span class="amat-bar-mark">+14%</span>
+      </div>
+      <div class="amat-bar-row amat-other">
+        <span class="amat-bar-label">next_line:1</span>
+        <span class="amat-bar-track"><span class="amat-bar-fill" style="width:100%"></span></span>
+        <span class="amat-bar-val">486.8</span>
+        <span class="amat-bar-mark">比 no 还差</span>
+      </div>
+    </div>
+
+    <div class="why-box">
+      <strong>为什么？</strong> <code>ip_stride</code> 在 PC 级别学习了固定步长模式——这个 load 高频重复执行。而 <code>next_line</code> <strong>比 no 还差</strong>：预取了错误的行，占用了缓存带宽，拖累了真正需要的数据。
+    </div>
+  </div>
+</div>
+
+<!-- ── 案例 4 ──────────────────────────────────────── -->
+<h2>案例 4：什么都不做反而最好</h2>
+
+<div class="example-block">
+  <div class="example-hd">
+    <span class="example-title">
+      <span class="badge badge-done">Perl_sv_catsv</span>
+      PC <code>0x4a1288</code>
+    </span>
+    <span class="example-badge badge-gap">AMAT Gap +17%</span>
+  </div>
+  <div class="example-body">
+    <div class="asm-box">
+<div class="asm-load">>>>     mov    0x8(%rbx),%rdx      <span style="color:var(--muted)">← 随机指针解引用 (LOAD)</span></div>
+<div>0x4a128c: test   %rdx,%rdx</div>
+<div>0x4a128f: je     4a12a0</div>
+    </div>
+
+    <div class="amat-bar-wrap">
+      <div class="amat-bar-row amat-best">
+        <span class="amat-bar-label">no:1</span>
+        <span class="amat-bar-track"><span class="amat-bar-fill" style="width:83%"></span></span>
+        <span class="amat-bar-val">375.0</span>
+        <span class="amat-bar-mark">← 最优</span>
+      </div>
+      <div class="amat-bar-row amat-worse">
+        <span class="amat-bar-label">next_line:1</span>
+        <span class="amat-bar-track"><span class="amat-bar-fill" style="width:96%"></span></span>
+        <span class="amat-bar-val">437.5</span>
+        <span class="amat-bar-mark">+17%</span>
+      </div>
+      <div class="amat-bar-row amat-other">
+        <span class="amat-bar-label">ip_stride:1</span>
+        <span class="amat-bar-track"><span class="amat-bar-fill" style="width:100%"></span></span>
+        <span class="amat-bar-val">450.0</span>
+      </div>
+    </div>
+
+    <div class="why-box">
+      <strong>为什么？</strong> 当访存模式完全随机时，任何预取都是浪费——预测准确率接近 0%，反而占用缓存空间和带宽。<strong>有时候什么都不做就是最好的策略。</strong>
+    </div>
+  </div>
+</div>
+
+<!-- ── 如何指导机器学习 ───────────────────────────── -->
+<h2>如何变成训练数据</h2>
+
+<p>Stage 7 将汇编上下文（Stage 5）与最优标签（Stage 6）合并成 instruction-tuning 格式：</p>
+
+<div class="data-sample">
+<span class="key">"instruction"</span>: <span class="str">"Given the following x86-64 assembly context for a load
+instruction in function 'Perl_pp_match', predict the optimal prefetch policy.
+
+Instructions before load:
+  0x46313c: mov    %rax,0x78(%rsp)
+  0x463141: xor    %eax,%eax
+  0x463143: movzbl 0x24(%r8),%eax
+
+Load instruction:
+  <strong>mov    0x50(%r8),%r14</strong>
+
+Instructions after load:
+  0x46314c: mov    %eax,%edx
+  0x46314e: and    $0x3,%edx
+  ..."</span>,
+<span class="key">"label"</span>: <span class="str">"next_line:1"</span>,
+<span class="key">"pc"</span>: <span class="str">"0x463148"</span>
+</div>
+
+<p>模型学到：看到 <code>r8+0x24</code> 然后 <code>r8+0x50</code> 这种相邻偏移 → 选 <code>next_line</code>。看到 <code>rip→+0x28→+0x00→+0x18</code> 的指针链 → 选 <code>ip_stride</code>。</p>
+
+<!-- ── 总结 ──────────────────────────────────────── -->
+<h2>核心洞察</h2>
+
+<table class="conc-table">
+<tr><td>AMAT 是控制变量实验</td><td>同一 trace × 不同 prefetcher → AMAT 差异纯粹来自 hit/miss 比例差异</td></tr>
+<tr><td>Prefetcher 是近似函数</td><td><code>f(PC_history, global_pattern) → address</code> — 每个 prefetcher 的近似能力不同</td></tr>
+<tr><td>最低 AMAT = 最优近似</td><td>对特定 PC 的访存模式，AMAT 最低的 prefetcher 提供了最好的近似</td></tr>
+<tr><td>汇编上下文稳定</td><td>编译后的机器码在同一输入下走同样路径 → 静态度量到动态行为的映射是可学习的</td></tr>
+</table>
+
+<footer>
+  本文数据来自 ChampSim profiling pipeline 对 SPEC CPU2006 400.perlbench 的实测。
+  Pipeline 脚本位于 <code>ChampSim/tools/profiling/</code>，使用 Intel PIN 3.22 采集 trace，
+  14 个 ChampSim 二进制分别模拟不同 prefetcher，全程可复现。
+  &nbsp;|&nbsp; 更新于 2026-05-13
+</footer>
+</body>
+</html>
