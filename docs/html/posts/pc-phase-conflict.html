@@ -194,21 +194,93 @@
     display: flex; flex-direction: column; gap: .5rem; margin: 1.25rem 0;
   }
 
-  .taxonomy-tree {
+  /* ── Taxonomy Tree ────────────────────────────────── */
+  .tax-tree {
     margin: 1.5rem 0;
-    font-family: var(--font-mono);
-    font-size: .82rem;
-    line-height: 1.9;
-    background: var(--code-bg);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 1.5rem;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.12);
+}
+  .tax-root {
+    display: flex; align-items: center; gap: .6rem;
+    font-weight: 700; font-size: .95rem; color: var(--text-hi);
+    margin-bottom: 1rem;
+  }
+  .tax-root::before {
+    content: '';
+    display: inline-block;
+    width: 8px; height: 8px;
+    background: var(--accent);
+    border-radius: 50%;
+    flex-shrink: 0;
+    box-shadow: 0 0 8px rgba(212,149,40,0.3);
+  }
+  .tax-branches {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+  }
+  @media (max-width: 640px) {
+    .tax-branches { grid-template-columns: 1fr; }
+  }
+  .tax-branch {
+    background: var(--bg);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 1.2rem 1.5rem;
-    color: var(--text);
+    overflow: hidden;
+    transition: border-color var(--transition);
   }
-  .taxonomy-tree .cat-a { color: var(--blue); font-weight: 700; }
-  .taxonomy-tree .cat-b { color: var(--purple); font-weight: 700; }
-  .taxonomy-tree .item { color: var(--muted); }
-  .taxonomy-tree .hl  { color: var(--text-hi); }
+  .tax-branch:hover { border-color: var(--border-hi); }
+  .tax-branch-hd {
+    padding: .55rem .9rem;
+    font-weight: 650; font-size: .85rem;
+    display: flex; align-items: center; gap: .5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .tax-branch-a .tax-branch-hd {
+    background: rgba(88,152,204,0.06);
+    color: var(--blue);
+  }
+  .tax-branch-b .tax-branch-hd {
+    background: rgba(152,120,190,0.06);
+    color: var(--purple);
+  }
+  .tax-branch-hd .tax-icon {
+    font-size: .9rem;
+    width: 1.2em; text-align: center;
+    flex-shrink: 0;
+  }
+  .tax-branch-sub {
+    font-size: .72rem; color: var(--muted);
+    font-weight: 400; margin-left: auto;
+  }
+  .tax-items {
+    display: flex; flex-direction: column;
+    padding: .35rem 0;
+  }
+  .tax-item {
+    display: flex; align-items: center; gap: .5rem;
+    padding: .42rem .9rem;
+    font-size: .82rem;
+    color: var(--text);
+    transition: background var(--transition);
+  }
+  .tax-item:hover { background: rgba(255,255,255,0.015); }
+  .tax-item .tax-id {
+    font-family: var(--font-mono);
+    font-size: .72rem; font-weight: 700;
+    min-width: 2em; color: var(--muted);
+  }
+  .tax-item .tax-fix {
+    margin-left: auto;
+    font-size: .68rem;
+    padding: .12em .5em;
+    border-radius: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
 
   .glossary-item {
     background: var(--surface);
@@ -279,22 +351,65 @@
 <!-- ── 分类总览 ─────────────────────────────────────── -->
 <h2>分类总览</h2>
 
-<div class="taxonomy-tree">
-┌──────────────────────────────────────────────────────────┐<br>
-│&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;PC 相位冲突（同一 load PC，多种访存模式）<br>
-│&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│<br>
-│&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;┌─────────┴─────────┐<br>
-│&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│<br>
-│&nbsp;&nbsp;<span class="cat-a">类别 A：编译器因素</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cat-b">类别 B：语义因素</span><br>
-│&nbsp;&nbsp;多上下文 → 一个 PC&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;函数自身就是多模的<br>
-│&nbsp;&nbsp;┌──────────────────┐&nbsp;&nbsp;┌──────────────────┐<br>
-│&nbsp;&nbsp;│ A1 跨 TU 编译&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│&nbsp;&nbsp;│ B1 参数随时间变化&nbsp;&nbsp;│<br>
-│&nbsp;&nbsp;│ A2 函数指针/虚函数 │&nbsp;&nbsp;│ B2 间接索引访问&nbsp;&nbsp;&nbsp;&nbsp;│<br>
-│&nbsp;&nbsp;│ A3 动态库函数&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│&nbsp;&nbsp;│ B3 多阶段算法&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│<br>
-│&nbsp;&nbsp;│ A4 函数体过大&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│&nbsp;&nbsp;│ B4 交替数据结构&nbsp;&nbsp;&nbsp;&nbsp;│<br>
-│&nbsp;&nbsp;│ A5 递归函数&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│<br>
-│&nbsp;&nbsp;└──────────────────┘&nbsp;&nbsp;└──────────────────┘<br>
-└──────────────────────────────────────────────────────────┘
+<div class="tax-tree">
+  <div class="tax-root">PC 相位冲突</div>
+  <div class="tax-branches">
+
+    <div class="tax-branch tax-branch-a">
+      <div class="tax-branch-hd">
+        <span class="tax-icon">A</span> 类别 A：编译器因素
+        <span class="tax-branch-sub">多个调用上下文 → 一个 PC</span>
+      </div>
+      <div class="tax-items">
+        <div class="tax-item">
+          <span class="tax-id">A1</span> 跨编译单元调用
+          <span class="tax-fix fix-yes">LTO 可消解</span>
+        </div>
+        <div class="tax-item">
+          <span class="tax-id">A2</span> 函数指针 / 虚函数
+          <span class="tax-fix fix-may">PGO 部分</span>
+        </div>
+        <div class="tax-item">
+          <span class="tax-id">A3</span> 动态库 (.so) 函数
+          <span class="tax-fix fix-yes">静态链接</span>
+        </div>
+        <div class="tax-item">
+          <span class="tax-id">A4</span> 函数体过大，内联拒绝
+          <span class="tax-fix fix-may">LTO+PGO 部分</span>
+        </div>
+        <div class="tax-item">
+          <span class="tax-id">A5</span> 递归函数
+          <span class="tax-fix fix-may">尾递归可消</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="tax-branch tax-branch-b">
+      <div class="tax-branch-hd">
+        <span class="tax-icon">B</span> 类别 B：语义因素
+        <span class="tax-branch-sub">函数自身就是多模的</span>
+      </div>
+      <div class="tax-items">
+        <div class="tax-item">
+          <span class="tax-id">B1</span> 参数随时间变化
+          <span class="tax-fix fix-no">不可消解</span>
+        </div>
+        <div class="tax-item">
+          <span class="tax-id">B2</span> 间接索引访问
+          <span class="tax-fix fix-no">不可消解</span>
+        </div>
+        <div class="tax-item">
+          <span class="tax-id">B3</span> 多阶段算法
+          <span class="tax-fix fix-no">不可消解</span>
+        </div>
+        <div class="tax-item">
+          <span class="tax-id">B4</span> 交替数据结构
+          <span class="tax-fix fix-may">loop fission</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
 </div>
 
 <!-- ════════════════════════════════════════════════════ -->
