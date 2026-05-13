@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>同一个 PC 的相位冲突 — 跨编译单元的函数调用如何污染训练标签</title>
+<title>同一个 PC 的相位冲突 — 完整分类与可复现案例</title>
 <link rel="stylesheet" href="../style.css">
 <style>
   .hero { margin: 1rem 0 2rem; }
@@ -27,8 +27,7 @@
   }
   .insight-card .ic-num {
     font-family: var(--font-mono);
-    font-size: 1.5rem;
-    font-weight: 700;
+    font-size: 1.5rem; font-weight: 700;
     color: var(--accent-glow);
   }
   .insight-card h4 { margin: .3rem 0 .15rem; font-size: .92rem; color: var(--text-hi); }
@@ -57,22 +56,16 @@
     flex-wrap: wrap;
   }
   .example-title {
-    font-weight: 650;
-    font-size: .95rem;
-    color: var(--text-hi);
-    display: flex;
-    align-items: center;
-    gap: .5rem;
+    font-weight: 650; font-size: .95rem; color: var(--text-hi);
+    display: flex; align-items: center; gap: .5rem;
   }
   .example-badge {
-    font-size: .7rem;
-    font-weight: 700;
-    padding: .2em .6em;
-    border-radius: 10px;
-    white-space: nowrap;
+    font-size: .7rem; font-weight: 700;
+    padding: .2em .6em; border-radius: 10px; white-space: nowrap;
   }
   .badge-pc    { background: var(--red); color: #f0a8a0; border: 1px solid rgba(197,85,66,0.2); font-family: var(--font-mono); }
-  .badge-tu    { background: var(--purple-dim); color: var(--purple); border: 1px solid rgba(152,120,190,0.2); }
+  .badge-a     { background: var(--blue-dim); color: var(--blue); border: 1px solid rgba(88,152,204,0.2); }
+  .badge-b     { background: var(--purple-dim); color: var(--purple); border: 1px solid rgba(152,120,190,0.2); }
   .badge-mix   { background: var(--yellow-dim); color: var(--yellow); border: 1px solid rgba(196,144,40,0.2); }
   .example-body { padding: 1.2rem; }
 
@@ -83,9 +76,7 @@
     padding: .7rem 1rem;
     margin: .8rem 0;
     font-family: var(--font-mono);
-    font-size: .78rem;
-    line-height: 1.7;
-    color: var(--muted);
+    font-size: .78rem; line-height: 1.7; color: var(--muted);
   }
   .file-tree .hl { color: var(--text-hi); font-weight: 600; }
 
@@ -96,104 +87,75 @@
     padding: 1rem 1.3rem;
     margin-bottom: 1rem;
     font-family: var(--font-mono);
-    font-size: .82rem;
-    line-height: 1.6;
-    overflow-x: auto;
-    position: relative;
+    font-size: .82rem; line-height: 1.6;
+    overflow-x: auto; position: relative;
   }
   .asm-box::before {
     content: 'x86-64 Assembly';
-    position: absolute;
-    top: -1px; right: 1rem;
-    font-size: .65rem;
-    text-transform: uppercase;
-    letter-spacing: .08em;
-    color: var(--muted);
-    background: var(--code-bg);
+    position: absolute; top: -1px; right: 1rem;
+    font-size: .65rem; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--muted); background: var(--code-bg);
     padding: .15em .6em;
-    border: 1px solid var(--border);
-    border-top: none;
-    border-radius: 0 0 4px 4px;
-    font-family: var(--font-body);
+    border: 1px solid var(--border); border-top: none;
+    border-radius: 0 0 4px 4px; font-family: var(--font-body);
   }
   .asm-box.compact::before { display: none; }
   .asm-box.compact { margin-bottom: .4rem; }
   .asm-load {
     color: var(--accent-glow);
     background: rgba(212,149,40,0.08);
-    display: inline-block;
-    width: 100%;
-    padding: .12em 0;
-    margin: .08em 0;
+    display: inline-block; width: 100%;
+    padding: .12em 0; margin: .08em 0;
     border-left: 3px solid var(--accent);
     padding-left: .5rem;
   }
-  .asm-pc-hi {
-    color: var(--red);
-    font-weight: 700;
-    background: rgba(197,85,66,0.1);
-    padding: .05em .2em;
-    border-radius: 3px;
+  .asm-call {
+    color: var(--blue); font-weight: 600;
   }
 
   .split-demo {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: .85rem;
-    margin: 1.25rem 0;
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: .85rem; margin: 1.25rem 0;
   }
-  @media (max-width: 700px) {
-    .split-demo { grid-template-columns: 1fr; }
-  }
+  @media (max-width: 700px) { .split-demo { grid-template-columns: 1fr; } }
   .split-col {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    overflow: hidden;
+    border-radius: var(--radius-lg); overflow: hidden;
   }
   .split-col-hd {
     background: var(--surface-hi);
     padding: .6rem 1rem;
-    font-weight: 650;
-    font-size: .85rem;
-    color: var(--text-hi);
+    font-weight: 650; font-size: .85rem; color: var(--text-hi);
     border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    gap: .5rem;
+    display: flex; align-items: center; gap: .5rem;
   }
-  .split-col-body {
-    padding: .8rem 1rem;
-  }
+  .split-col-body { padding: .8rem 1rem; }
   .split-col-body .asm-box { margin-bottom: 0; font-size: .75rem; }
   .split-col-body .asm-box::before { display: none; }
+
+  .three-col {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: .85rem; margin: 1.25rem 0;
+  }
+  @media (max-width: 700px) { .three-col { grid-template-columns: 1fr; } }
 
   .output-box {
     background: var(--code-bg);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: .85rem 1rem;
-    margin: .8rem 0;
-    font-family: var(--font-mono);
-    font-size: .76rem;
-    line-height: 1.55;
-    overflow-x: auto;
-    color: var(--text);
+    padding: .85rem 1rem; margin: .8rem 0;
+    font-family: var(--font-mono); font-size: .76rem;
+    line-height: 1.55; overflow-x: auto; color: var(--text);
   }
-  .output-box .delta {
-    color: var(--accent-glow);
-    font-weight: 600;
-  }
+  .output-box .delta { color: var(--accent-glow); font-weight: 600; }
 
   .why-box {
     background: var(--surface);
     border-left: 3px solid var(--accent);
     border-radius: 0 var(--radius) var(--radius) 0;
-    padding: .85rem 1.2rem;
-    margin: 1rem 0;
-    font-size: .88rem;
-    color: var(--text);
-    line-height: 1.7;
+    padding: .85rem 1.2rem; margin: 1rem 0;
+    font-size: .88rem; color: var(--text); line-height: 1.7;
   }
   .why-box strong { color: var(--accent-glow); }
 
@@ -201,87 +163,73 @@
     background: var(--code-bg);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: .85rem 1.2rem;
-    margin: .8rem 0;
-    font-family: var(--font-mono);
-    font-size: .78rem;
-    line-height: 1.6;
-    color: var(--text);
-    overflow-x: auto;
+    padding: .85rem 1.2rem; margin: .8rem 0;
+    font-family: var(--font-mono); font-size: .78rem;
+    line-height: 1.6; color: var(--text); overflow-x: auto;
   }
   .cmd-box .prompt { color: var(--accent); }
   .cmd-box .comment { color: var(--muted); }
 
-  .compiler-table, .strat-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin: 1.25rem 0;
-    font-size: .87rem;
-    border-radius: var(--radius);
-    overflow: hidden;
+  table {
+    width: 100%; border-collapse: collapse;
+    margin: 1.25rem 0; font-size: .87rem;
+    border-radius: var(--radius); overflow: hidden;
     border: 1px solid var(--border);
   }
-  .compiler-table th, .strat-table th {
-    background: var(--surface);
-    font-weight: 600;
-    color: var(--text-hi);
-    font-size: .8rem;
-    text-transform: uppercase;
-    letter-spacing: .06em;
-    padding: .65rem .9rem;
-    border: 1px solid var(--border);
+  th {
+    background: var(--surface); font-weight: 600;
+    color: var(--text-hi); font-size: .8rem;
+    text-transform: uppercase; letter-spacing: .06em;
+    padding: .65rem .9rem; border: 1px solid var(--border);
   }
-  .compiler-table td, .strat-table td {
+  td {
     border: 1px solid var(--border);
-    padding: .5rem .9rem;
-    vertical-align: top;
-    font-size: .84rem;
+    padding: .5rem .9rem; vertical-align: top; font-size: .84rem;
   }
-  .strat-table code, .compiler-table code { font-size: .82em; }
-  .strat-table td:first-child { font-weight: 600; color: var(--text-hi); white-space: nowrap; }
-
-  .compare-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin: 1.25rem 0;
-    font-size: .87rem;
-    border-radius: var(--radius);
-    overflow: hidden;
-    border: 1px solid var(--border);
-  }
-  .compare-table th {
-    background: var(--surface);
-    font-weight: 600;
-    color: var(--text-hi);
-    font-size: .8rem;
-    text-transform: uppercase;
-    letter-spacing: .06em;
-    padding: .65rem .9rem;
-    border: 1px solid var(--border);
-  }
-  .compare-table td {
-    border: 1px solid var(--border);
-    padding: .65rem .9rem;
-    vertical-align: top;
-  }
-  .compare-table tr:nth-child(even) { background: rgba(255,255,255,0.012); }
+  tr:nth-child(even) { background: rgba(255,255,255,0.012); }
+  td code { font-size: .82em; }
+  td:first-child { white-space: nowrap; }
 
   .note-group {
-    display: flex;
-    flex-direction: column;
-    gap: .5rem;
-    margin: 1.25rem 0;
+    display: flex; flex-direction: column; gap: .5rem; margin: 1.25rem 0;
   }
 
-  .three-col {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: .85rem;
-    margin: 1.25rem 0;
+  .taxonomy-tree {
+    margin: 1.5rem 0;
+    font-family: var(--font-mono);
+    font-size: .82rem;
+    line-height: 1.9;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.2rem 1.5rem;
+    color: var(--text);
   }
-  @media (max-width: 700px) {
-    .three-col { grid-template-columns: 1fr; }
+  .taxonomy-tree .cat-a { color: var(--blue); font-weight: 700; }
+  .taxonomy-tree .cat-b { color: var(--purple); font-weight: 700; }
+  .taxonomy-tree .item { color: var(--muted); }
+  .taxonomy-tree .hl  { color: var(--text-hi); }
+
+  .glossary-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: .7rem 1rem;
+    margin: .4rem 0;
+    font-size: .86rem;
+    line-height: 1.6;
   }
+  .glossary-item strong { color: var(--accent-glow); font-family: var(--font-mono); font-size: .88em; }
+
+  .fix-tag {
+    display: inline-block;
+    font-size: .7rem; font-weight: 700;
+    padding: .1em .55em; border-radius: 10px;
+    margin-left: .4rem;
+  }
+  .fix-yes { background: var(--green-dim); color: var(--green); border: 1px solid rgba(122,158,72,0.2); }
+  .fix-may { background: var(--yellow-dim); color: var(--yellow); border: 1px solid rgba(196,144,40,0.2); }
+  .fix-no  { background: var(--red); color: #f0a8a0; border: 1px solid rgba(197,85,66,0.2); }
 </style>
 </head>
 <body>
@@ -296,68 +244,88 @@
 <div class="hero">
   <h1>同一个 PC 的相位冲突</h1>
   <p class="tagline">
-    跨编译单元的函数调用如何污染训练标签 ——
-    同一个 <code>add (%rdi),%ecx</code>，三种 stride（+4, +16, +64）；同一个 <code>add (%rdi,%rdx,4),%eax</code>，顺序访问和随机访问交替出现。
-    不依赖任何 <code>noinline</code> hack，只用多文件项目的日常编译行为演示相位冲突的产生与消解。
+    完整分类与可复现案例 —— 同一 load PC 在不同执行阶段呈现出截然不同的访存模式。
+    两大类 9 种情况：编译器因素（跨文件编译、函数指针等 5 种）和语义因素（参数变化、间接索引等 4 种）。
   </p>
 </div>
 
-<!-- ── 核心理念 ─────────────────────────────────────── -->
+<!-- ── 缩写解释 ─────────────────────────────────────── -->
+<h2>先解释几个缩写</h2>
+
+<div class="glossary-item"><strong>TU</strong>（Translation Unit / 编译单元）—— 一个 <code>.c</code> 文件经过预处理器展开后的产物。<code>gcc -c foo.c</code> 编译一个 TU，产出 <code>foo.o</code>。大多数项目由几十上百个 TU 组成，编译时每个 TU 各自独立处理。</div>
+<div class="glossary-item"><strong>LTO</strong>（Link-Time Optimization / 链接时优化）—— 把优化推迟到链接阶段。不加 LTO 时，<code>gcc -c a.c</code> 完全看不到 <code>b.c</code> 里的函数体。加 <code>-flto</code> 后，链接器拿到所有 <code>.o</code> 的中间表示，可以跨文件内联。</div>
+<div class="glossary-item"><strong>PGO</strong>（Profile-Guided Optimization / 剖面引导优化）—— 先跑一遍程序收集热点数据，再基于这份数据重编译。可以帮编译器判断"这个函数指针实际指向谁"或"这个函数值不值得内联"。</div>
+<div class="glossary-item"><strong>PLT</strong>（Procedure Linkage Table / 过程链接表）—— 动态库（<code>.so</code>）的跳板。程序调用 <code>memcpy</code> 时先跳到 PLT 里的 stub，stub 再跳到真正的实现。</div>
+
+<!-- ── 核心理念卡片 ─────────────────────────────────── -->
 <div class="insight-row">
   <div class="insight-card">
-    <div class="ic-num">1</div>
-    <h4>跨 .o 调用 = 天然不可内联</h4>
-    <p>无 LTO 时，编译器只看到调用方的 <code>.c</code> 文件，函数体在另一个 <code>.o</code> 里。所有跨 TU 调用必然共享同一个 PC。</p>
+    <div class="ic-num">A</div>
+    <h4>编译器因素</h4>
+    <p>多个不同的调用上下文被迫共享同一个 PC。编译器做不到或不愿为它们生成独立副本。</p>
   </div>
   <div class="insight-card">
-    <div class="ic-num">2</div>
-    <h4>同一 PC ≠ 同一模式</h4>
-    <p>stride 参数由调用方传入，indices 数组内容决定访问模式。同一个 load 指令，行为完全取决于调用上下文。</p>
+    <div class="ic-num">B</div>
+    <h4>语义因素</h4>
+    <p>函数自身逻辑就包含多种访存模式。不是调用问题——一个 call site 内部的 PC 天然多义。</p>
   </div>
   <div class="insight-card">
-    <div class="ic-num">3</div>
-    <h4>内联是天然解药</h4>
-    <p>函数体在同 <code>.c</code> 文件时，gcc -O2 内联到各 call site→不同 PC→标签不冲突。跨文件时需 LTO 或引入 call-chain 上下文。</p>
+    <div class="ic-num">?</div>
+    <h4>能否消解</h4>
+    <p>A 类大部分可通过 LTO/PGO 消解。B 类基本不能，只能在训练数据层面用 soft label 或时间分片应对。</p>
   </div>
 </div>
 
-<!-- ════════════════════════════════════════════════════ -->
-<!--  实验设置                                          -->
-<!-- ════════════════════════════════════════════════════ -->
-<h2>实验设置：跨编译单元模拟真实代码库</h2>
+<!-- ── 分类总览 ─────────────────────────────────────── -->
+<h2>分类总览</h2>
 
-<p>真实项目（SPEC、Linux kernel、任何多文件 C 项目）中，函数分布在不同的 <code>.c</code> 文件。编译时各自生成 <code>.o</code>，链接时拼在一起。<strong>跨 <code>.o</code> 的函数调用在 <code>-O2</code> 下无法内联</strong>（除非开启 LTO）。</p>
-
-<div class="file-tree">
-<span class="hl">worker.h</span>   — 函数声明<br>
-<span class="hl">worker.c</span>   — 实现在另一个编译单元<br>
-<span class="hl">main.c</span>     — 调用方
+<div class="taxonomy-tree">
+┌──────────────────────────────────────────────────────────┐<br>
+│&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;PC 相位冲突（同一 load PC，多种访存模式）<br>
+│&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│<br>
+│&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;┌─────────┴─────────┐<br>
+│&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│<br>
+│&nbsp;&nbsp;<span class="cat-a">类别 A：编译器因素</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cat-b">类别 B：语义因素</span><br>
+│&nbsp;&nbsp;多上下文 → 一个 PC&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;函数自身就是多模的<br>
+│&nbsp;&nbsp;┌──────────────────┐&nbsp;&nbsp;┌──────────────────┐<br>
+│&nbsp;&nbsp;│ A1 跨 TU 编译&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│&nbsp;&nbsp;│ B1 参数随时间变化&nbsp;&nbsp;│<br>
+│&nbsp;&nbsp;│ A2 函数指针/虚函数 │&nbsp;&nbsp;│ B2 间接索引访问&nbsp;&nbsp;&nbsp;&nbsp;│<br>
+│&nbsp;&nbsp;│ A3 动态库函数&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│&nbsp;&nbsp;│ B3 多阶段算法&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│<br>
+│&nbsp;&nbsp;│ A4 函数体过大&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│&nbsp;&nbsp;│ B4 交替数据结构&nbsp;&nbsp;&nbsp;&nbsp;│<br>
+│&nbsp;&nbsp;│ A5 递归函数&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│<br>
+│&nbsp;&nbsp;└──────────────────┘&nbsp;&nbsp;└──────────────────┘<br>
+└──────────────────────────────────────────────────────────┘
 </div>
 
-<div class="cmd-box">
-<span class="prompt">$</span> gcc -no-pie -O2 -c worker.c -o worker.o<br>
-<span class="prompt">$</span> gcc -no-pie -O2 -c main.c   -o main.o<br>
-<span class="prompt">$</span> gcc -no-pie worker.o main.o -o demo
-</div>
-
-<p style="font-size:.82rem;color:var(--muted);margin-top:.5rem;"><code>-no-pie</code> 让代码段 PC 固定，方便反汇编时精确定位。与 SPEC 的编译方式一致。</p>
-
 <!-- ════════════════════════════════════════════════════ -->
-<!--  案例 1：3 strides, 1 PC                         -->
+<!--  类别 A                                           -->
 <!-- ════════════════════════════════════════════════════ -->
-<h2>案例 1：同一 PC，三种不同的 stride</h2>
+<h2>类别 A：编译器因素 — 多个调用上下文被迫共享一个 PC</h2>
+
+<p>这类冲突的本质：程序员写了多个不同的调用，每个调用本应有各自的访存模式，但编译器<strong>做不到</strong>或<strong>选择不</strong>为它们生成独立的副本，多个调用被迫走到同一个 PC。</p>
+
+<!-- A1 -->
+<h3>A1：跨编译单元调用（无 LTO）<span class="fix-tag fix-yes">可消解：LTO</span></h3>
+
+<p><strong>本质</strong>：函数体在另一个 <code>.c</code> 文件里。不加 LTO 时，编译器在处理调用方这个 TU 的时候完全看不见被调函数的函数体，只能生成一个 <code>call</code> 指令指向外部符号。所有调用方共享同一个 PC。</p>
 
 <div class="example-block">
   <div class="example-hd">
     <span class="example-title">
       <span class="example-badge badge-pc">PC 0x4013ea</span>
-      <span class="example-badge badge-tu">跨 TU</span>
-      <code>sum_strided</code> — 被三处调用，stride 各不相同
+      <span class="example-badge badge-a">A1·跨 TU</span>
+      <code>sum_strided</code> — worker.c 和 main.c 分文件编译
     </span>
   </div>
   <div class="example-body">
 
-    <h3 style="margin-top:0">worker.c（另一个编译单元）</h3>
+    <div class="file-tree">
+<span class="hl">worker.h</span>   — 函数声明<br>
+<span class="hl">worker.c</span>   — 实现在另一个编译单元<br>
+<span class="hl">main.c</span>     — 调用方
+    </div>
+
+    <h4 style="margin-top:1rem;">worker.c（另一个编译单元）</h4>
     <div class="asm-box compact">
 <span style="color:var(--muted)">// 函数体在 worker.o 中，main.o 编译时完全看不到</span>
 int sum_strided(int *arr, int n, int stride) {
@@ -369,31 +337,30 @@ int sum_strided(int *arr, int n, int stride) {
 }
     </div>
 
-    <h3>main.c 反汇编（调用方）</h3>
+    <h4>main.o 反汇编（调用方）</h4>
     <div class="asm-box">
-<span style="color:var(--muted)">; 三处 call 全部指向同一个 PC — 因为函数体在另一个 .o 里</span>
-  401166:  <strong>call   4013d0</strong> &lt;sum_strided&gt;    <span style="color:var(--muted)">; stride=1  → 步进 +4/iter</span>
-  401193:  <strong>call   4013d0</strong> &lt;sum_strided&gt;    <span style="color:var(--muted)">; stride=4  → 步进 +16/iter</span>
-  4011c0:  <strong>call   4013d0</strong> &lt;sum_strided&gt;    <span style="color:var(--muted)">; stride=16 → 步进 +64/iter</span>
+<span style="color:var(--muted)">; 三处 call 全部指向同一地址 — 函数体在另一个 .o 里</span>
+  <span class="asm-call">401166:  call   4013d0</span> &lt;sum_strided&gt;    <span style="color:var(--muted)">; stride=1  → 步进 +4/iter</span>
+  <span class="asm-call">401193:  call   4013d0</span> &lt;sum_strided&gt;    <span style="color:var(--muted)">; stride=4  → 步进 +16/iter</span>
+  <span class="asm-call">4011c0:  call   4013d0</span> &lt;sum_strided&gt;    <span style="color:var(--muted)">; stride=16 → 步进 +64/iter</span>
     </div>
 
-    <h3>worker.o 中 sum_strided 的反汇编</h3>
+    <h4>sum_strided 内部反汇编</h4>
     <div class="asm-box">
-<span style="color:var(--muted)">; sum_strided 内部的循环 —— stride 由 r8 寄存器控制</span>
   4013d8:  movslq %edx,%r8           <span style="color:var(--muted)">; stride → r8</span>
-  4013df:  shl    $0x2,%r8            <span style="color:var(--muted)">; r8 = stride * 4 (字节偏移)</span>
+  4013df:  shl    $0x2,%r8            <span style="color:var(--muted)">; r8 = stride * 4（字节偏移）</span>
   4013e8:  add    %edx,%eax           <span style="color:var(--muted)">; i += stride</span>
-  <span class="asm-load">4013ea:  add    (%rdi),%ecx</span>         <span style="color:var(--muted)">; ← 唯一的 Load PC: 0x4013ea</span>
+  <span class="asm-load">4013ea:  add    (%rdi),%ecx</span>         <span style="color:var(--muted)">; ← 唯一的 Load PC：0x4013ea</span>
   4013ec:  add    %r8,%rdi            <span style="color:var(--muted)">; rdi += stride*4</span>
   4013f1:  jg     4013e8              <span style="color:var(--muted)">; loop</span>
     </div>
 
     <div class="why-box">
-      <strong>关键机制</strong><br>
-      循环变量 <code>i</code> 由 <code>rdi</code> 指针的移动来隐式跟踪——每次迭代 <code>rdi += stride*4</code>。三处调用传入不同的 <code>stride</code> → <code>r8</code> 分别为 4, 16, 64 → 同一 PC <code>0x4013ea</code> 看到的地址 delta 分别是 +4, +16, +64。
+      <strong>机制</strong>：循环变量 <code>i</code> 由 <code>rdi</code> 指针的移动来隐式跟踪——每次迭代 <code>rdi += stride*4</code>。三处调用传入不同的 <code>stride</code> → <code>r8</code> 分别为 4、16、64 → 同一 PC <code>0x4013ea</code> 看到的地址 delta 是 +4、+16、+64。<br><br>
+      <strong>消解</strong>：加 <code>-flto</code> 重新编译，链接器可以在链接时把 <code>sum_strided</code> 内联到三处调用，各自生成独立 PC。
     </div>
 
-    <h3>运行时地址 Trace</h3>
+    <h4>运行时地址 Trace</h4>
     <div class="three-col">
       <div class="split-col">
         <div class="split-col-hd">stride=1 · 顺序</div>
@@ -430,38 +397,151 @@ arr[48] @ ...<span class="delta">630</span>  ← +64
       </div>
     </div>
 
-    <table class="compare-table">
-      <tr><th>调用</th><th>stride 参数</th><th>地址 delta</th><th>r8 寄存器</th><th>访存特征</th></tr>
+    <table>
+      <tr><th>调用</th><th>stride</th><th>地址 delta</th><th>r8 值</th><th>访存特征</th></tr>
       <tr><td>r1</td><td>1</td><td>+4</td><td>4</td><td>密集顺序</td></tr>
       <tr><td>r2</td><td>4</td><td>+16</td><td>16</td><td>跨步</td></tr>
       <tr><td>r3</td><td>16</td><td>+64</td><td>64</td><td>稀疏</td></tr>
     </table>
 
-    <p style="font-size:.84rem;color:var(--muted);">PC <code>0x4013ea</code> 的 profiler 记录中混合了三种 stride。如果 <code>next_line</code> 对顺序访问最优，它对稀疏访问可能完全无用——选出的 <code>best_prefetch</code> 是对三种模式的折中。</p>
+  </div>
+</div>
+
+<!-- A2 -->
+<h3>A2：函数指针 / 虚函数<span class="fix-tag fix-may">部分可消解：PGO</span></h3>
+
+<p><strong>本质</strong>：<code>call *%rax</code> 跳到哪去，编译器静态分析推不出来。即使函数体在同一个 TU 内、编译器完全看得到，也不知道该内联谁。</p>
+
+<div class="example-block">
+  <div class="example-hd">
+    <span class="example-title">
+      <span class="example-badge badge-pc">PC 0x401324</span>
+      <span class="example-badge badge-a">A2·函数指针</span>
+      <code>cmp_func</code> — qsort 通过指针回调
+    </span>
+  </div>
+  <div class="example-body">
+
+    <h4 style="margin-top:0">代码</h4>
+    <div class="asm-box compact">
+<span style="color:var(--muted)">// cmp_func 的地址被传给 qsort。qsort 内部通过函数指针调用它。</span>
+int cmp_func(const void *a, const void *b) {
+    int va = *(const int *)a;  <span style="color:var(--muted)">// ← Load PC #1</span>
+    int vb = *(const int *)b;  <span style="color:var(--muted)">// ← Load PC #2（cmp 指令隐含）</span>
+    return (va &gt; vb) - (va &lt; vb);
+}
+<span style="color:var(--muted)">// ...</span>
+qsort(data, 512, sizeof(int), cmp_func);
+    </div>
+
+    <h4>cmp_func 反汇编</h4>
+    <div class="asm-box">
+0000000000401270 &lt;cmp_func&gt;:
+  <span class="asm-load">401274:  mov    (%rsi),%eax</span>        <span style="color:var(--muted)">; ← Load PC #1：b 的值</span>
+  <span class="asm-load">401276:  cmp    %eax,(%rdi)</span>        <span style="color:var(--muted)">; ← Load PC #2：a 的值（cmp 隐含 load）</span>
+  401278:  setg   %al
+  40127b:  setl   %dl
+  401284:  sub    %edx,%eax
+  401286:  ret
+    </div>
+
+    <h4>main 中的调用</h4>
+    <div class="asm-box compact">
+  <span style="color:var(--muted)">; cmp_func 的地址被加载到 rcx，传给 qsort</span>
+  401133:  mov    %rbx,%rdi
+  401136:  mov    $0x200,%esi
+  <span class="asm-call">40113b:  call   401060</span> &lt;qsort@plt&gt;   <span style="color:var(--muted)">; qsort 内部通过 *rcx 回调 cmp_func</span>
+    </div>
+
+    <div class="why-box">
+      <strong>机制</strong>：PC <code>0x401274</code> 和 <code>0x401276</code> 在 qsort 执行期间被调用几万次。<code>a</code> 和 <code>b</code> 的地址由 qsort 内部的快排分区算法决定——一会儿比较 pivot（数组中央），一会儿分区交换（数组两端），一会儿递归子数组。<strong>同一个 load PC 的地址序列完全随机</strong>。<br><br>
+      <strong>消解</strong>：PGO 可以先跑一遍程序，收集"这个指针 99% 指向 cmp_func"的热点数据，下次编译时生成 <code>if (fp == cmp_func) call cmp_func else call *fp</code>（speculative devirtualization）。但这个内联是概率性的，不保证一定被编译器采纳。
+    </div>
 
   </div>
 </div>
 
-<!-- ════════════════════════════════════════════════════ -->
-<!--  案例 2：顺序 vs 随机                              -->
-<!-- ════════════════════════════════════════════════════ -->
-<h2>案例 2：同一 PC，顺序访问 vs 随机访问</h2>
+<!-- A3-A5 -->
+<h3>A3–A5：其余编译器因素</h3>
 
-<p>这是更极端的情况：同一个 load PC 在<strong>顺序遍历</strong>和<strong>随机跳转</strong>之间切换。同样跨编译单元，无 hack。</p>
+<table>
+  <tr><th>#</th><th>场景</th><th>本质</th><th>能否消解</th></tr>
+  <tr>
+    <td>A3</td>
+    <td><strong>动态库函数</strong></td>
+    <td><code>.so</code> 运行时加载，编译时只有一个 PLT stub。所有 <code>call memcpy@plt</code> 指向同一个 stub PC。</td>
+    <td><span class="fix-tag fix-yes">可消解</span> 静态链接（<code>.a</code> 替代 <code>.so</code>）</td>
+  </tr>
+  <tr>
+    <td>A4</td>
+    <td><strong>函数体过大</strong></td>
+    <td>即使同 TU、编译器看得到，几千行的函数内联代价远超收益，gcc 拒绝内联。如 perlbench 的 <code>S_regmatch</code>。</td>
+    <td><span class="fix-tag fix-may">部分</span> LTO + PGO 裁掉冷路径后内联热路径</td>
+  </tr>
+  <tr>
+    <td>A5</td>
+    <td><strong>递归函数</strong></td>
+    <td>理论上不可能展开为有限层。同一 PC 在不同递归深度访问不同的树节点。</td>
+    <td><span class="fix-tag fix-may">部分</span> 尾递归可优化为迭代，一般递归不可</td>
+  </tr>
+</table>
+
+<!-- ════════════════════════════════════════════════════ -->
+<!--  类别 B                                           -->
+<!-- ════════════════════════════════════════════════════ -->
+<h2>类别 B：语义因素 — 函数自身逻辑天然多模</h2>
+
+<p>这类冲突的本质：<strong>不是调用方的问题</strong>。即使只有一个 call site，编译器做了它能做的一切，函数内部的 PC 仍然会在不同时间做不同的事——因为这是函数本身的逻辑决定的。</p>
+
+<!-- B1 -->
+<h3>B1：同一 call site，参数随时间变化<span class="fix-tag fix-no">不可消解</span></h3>
+
+<p><strong>本质</strong>：只有<strong>一个</strong>call site（汇编里一条 <code>call</code> 指令），没有多个调用方。但参数值在不同时间传入的值不同，导致同一 PC 的访存模式随时间漂移。</p>
+
+<div class="example-block">
+  <div class="example-hd">
+    <span class="example-title">
+      <span class="example-badge badge-pc">PC 0x4013ea</span>
+      <span class="example-badge badge-b">B1·参数变化</span>
+      同一个 call，不同时间传不同 stride
+    </span>
+  </div>
+  <div class="example-body">
+
+    <div class="asm-box compact">
+<span style="color:var(--muted)">// 只有一个 call site，但 stride 来自变化的数据源</span>
+int strides[] = {1, 4, 16};
+for (int phase = 0; phase &lt; 3; phase++) {
+    sum_strided(data, 512, strides[phase]);  <span style="color:var(--muted)">// 同一个 call</span>
+}
+    </div>
+
+    <div class="why-box">
+      <strong>为什么编译器不能消解</strong>：为 <code>stride=1</code>、<code>stride=4</code>、<code>stride=16</code> 各生成一份 <code>sum_strided</code> 的副本，要求编译器在编译时就知道 <code>strides[]</code> 的全部可能取值——这不现实。更常见的真实场景：图像处理的 kernel_size 由用户输入指定，同一个高斯模糊函数在 <code>kernel=3</code> 和 <code>kernel=15</code> 时访存跨度完全不同。
+    </div>
+
+  </div>
+</div>
+
+<!-- B2 -->
+<h3>B2：间接索引访问（data-dependent index）<span class="fix-tag fix-no">不可消解</span></h3>
+
+<p><strong>本质</strong>：访问地址 = <code>base + indices[i] * sizeof(T)</code>。<code>indices</code> 的内容是运行时数据，编译器完全无法预测。</p>
 
 <div class="example-block">
   <div class="example-hd">
     <span class="example-title">
       <span class="example-badge badge-pc">PC 0x40142f</span>
-      <span class="example-badge badge-mix">顺序⇄随机</span>
+      <span class="example-badge badge-b">B2·间接索引</span>
+      <span class="example-badge badge-mix">顺序 ⇄ 随机</span>
       <code>sum_indirect</code> — indices 内容决定访问模式
     </span>
   </div>
   <div class="example-body">
 
-    <h3 style="margin-top:0">worker.c</h3>
+    <h4 style="margin-top:0">代码 & 反汇编</h4>
     <div class="asm-box compact">
-<span style="color:var(--muted)">// 通过 indices 间接访问 arr — indices 的内容决定 arr 的访问模式</span>
+<span style="color:var(--muted)">// 通过 indices 间接访问 arr — indices 内容决定 arr 的访问模式</span>
 int sum_indirect(int *arr, int *indices, int n) {
     int sum = 0;
     for (int i = 0; i &lt; n; i++) {
@@ -471,25 +551,11 @@ int sum_indirect(int *arr, int *indices, int n) {
 }
     </div>
 
-    <h3>main.c 调用</h3>
-    <div class="asm-box compact">
-<span style="color:var(--muted)">// Phase A: indices = [0,1,2,...] → 顺序访问 arr</span>
-for (int i = 0; i &lt; 512; i++) indices[i] = i;
-volatile int r4 = sum_indirect(data, indices, 512);
-
-<span style="color:var(--muted)">// Phase B: indices 随机打乱 → 随机访问 arr</span>
-shuffle(indices);
-volatile int r5 = sum_indirect(data, indices, 512);
-    </div>
-
-    <h3>sum_indirect 反汇编</h3>
     <div class="asm-box">
-  401418:  movslq %edx,%rdx
-  40141d:  lea    (%rsi,%rdx,4),%rcx   <span style="color:var(--muted)">; &indices[n] (循环边界)</span>
-  401428:  movslq (%rsi),%rdx           <span style="color:var(--muted)">; rdx = indices[i]</span>
-  40142b:  add    $0x4,%rsi             <span style="color:var(--muted)">; i++ (遍历 indices)</span>
-  <span class="asm-load">40142f:  add    (%rdi,%rdx,4),%eax</span>    <span style="color:var(--muted)">; ← 唯一的 Load PC: 0x40142f</span>
-  401432:  cmp    %rsi,%rcx             <span style="color:var(--muted)">;      arr[indices[i]]</span>
+  401428:  movslq (%rsi),%rdx           <span style="color:var(--muted)">; rdx = indices[i]（符号扩展）</span>
+  40142b:  add    $0x4,%rsi             <span style="color:var(--muted)">; i++（遍历 indices 数组本身是顺序的）</span>
+  <span class="asm-load">40142f:  add    (%rdi,%rdx,4),%eax</span>    <span style="color:var(--muted)">; ← 唯一的 Load PC：arr[indices[i]]</span>
+  401432:  cmp    %rsi,%rcx
   401435:  jne    401428                <span style="color:var(--muted)">; loop</span>
     </div>
 
@@ -503,7 +569,7 @@ indices[1]=1   arr[<span class="delta">1</span>] @ ...a74  ← +4<br>
 indices[2]=2   arr[<span class="delta">2</span>] @ ...a78  ← +4<br>
 indices[3]=3   arr[<span class="delta">3</span>] @ ...a7c  ← +4
           </div>
-          <p style="font-size:.75rem;color:var(--green);margin:.4rem 0 0;">适合 next_line：严格的 +4 stride</p>
+          <p style="font-size:.75rem;color:var(--green);margin:.4rem 0 0;">适合 next_line：严格 +4 stride</p>
         </div>
       </div>
       <div class="split-col">
@@ -515,161 +581,132 @@ indices[1]=12  arr[<span class="delta">12</span>]  @ ...a90  ← 大跳回<br>
 indices[2]=501 arr[<span class="delta">501</span>] @ ...f74  ← 又大跳<br>
 indices[3]=88  arr[<span class="delta">88</span>]  @ ...bc0  ← 回跳
           </div>
-          <p style="font-size:.75rem;color:var(--red);margin:.4rem 0 0;">适合 no：任何预取都是浪费</p>
+          <p style="font-size:.75rem;color:var(--red);margin:.4rem 0 0;">适合 no：任何预取都是噪音</p>
         </div>
       </div>
     </div>
 
-    <table class="compare-table">
+    <table>
       <tr><th>阶段</th><th>indices 内容</th><th>arr 访问模式</th><th>适合的 prefetcher</th></tr>
-      <tr><td>A</td><td><code>[0,1,2,3,...]</code></td><td>严格顺序 (+4/iter)</td><td style="color:var(--green)"><code>next_line</code></td></tr>
-      <tr><td>B</td><td>随机排列</td><td>完全随机跳转</td><td style="color:var(--red)"><code>no</code>（任何预取都是噪音）</td></tr>
+      <tr><td>A</td><td><code>[0,1,2,3,…]</code></td><td>严格顺序 (+4/iter)</td><td style="color:var(--green)"><code>next_line</code></td></tr>
+      <tr><td>B</td><td>随机排列</td><td>完全随机跳转</td><td style="color:var(--red)"><code>no</code>（任何预取都是浪费）</td></tr>
     </table>
 
     <div class="why-box">
-      <strong>为什么会这样？</strong><br>
-      <code>arr[indices[i]]</code> 的地址取决于 <code>indices[i]</code> 的值——这是<strong>运行时数据</strong>，编译器完全无法预知。<br><br>
-      同一个 PC <code>0x40142f</code> 在 profiler 中会收到两段截然不同的 AMAT 记录：一段是完美顺序（hit 率高），一段是随机跳转（miss 率高）。单一 prefetcher 标签无法同时描述两者。<br><br>
-      这种模式在真实代码中极其常见：稀疏矩阵的列索引、哈希表的 bucket 链、图的邻接表遍历——只要是"通过索引数组间接访问另一个数组"，就存在这个潜在问题。
+      <strong>为什么编译器不能消解</strong>：<code>indices[i]</code> 的值在运行时才确定。编译器没有办法知道 Phase A 和 Phase B 的区别——它只能看到一条 <code>add (%rdi,%rdx,4),%eax</code>，<code>rdx</code> 是循环中从 <code>(%rsi)</code> 加载的，值完全由运行时数据决定。<br><br>
+      这种模式在真实代码中极其常见：稀疏矩阵的列索引遍历、哈希表的 bucket chain、图的邻接表——只要是"通过索引数组间接访问另一个数组"，就属于此类。
     </div>
 
   </div>
 </div>
 
-<!-- ════════════════════════════════════════════════════ -->
-<!--  编译器行为：何时消解，何时不消解                  -->
-<!-- ════════════════════════════════════════════════════ -->
-<h2>编译器行为：何时消解，何时不消解</h2>
+<!-- B3-B4 -->
+<h3>B3–B4：其余语义因素</h3>
 
-<h3>自然消解：同编译单元内被内联</h3>
-
-<p>如果 <code>sum_strided</code> 定义在 <code>main.c</code> 中（同 TU），gcc -O2 会将其内联。三个 call site 各自生成独立的 add 指令——<strong>三个不同的 PC</strong>。profiler 标签不会冲突。</p>
-
-<h3>无法消解的真实场景</h3>
-
-<table class="compiler-table">
-  <tr><th>场景</th><th>为什么编译器无法拆分</th><th>常见程度</th></tr>
+<table>
+  <tr><th>#</th><th>场景</th><th>本质</th><th>能否消解</th></tr>
   <tr>
-    <td><strong>跨编译单元调用</strong></td>
-    <td>无 LTO 时编译器看不见函数体，只能生成 <code>call</code> 指令</td>
-    <td>几乎所有多文件项目</td>
+    <td>B3</td>
+    <td><strong>多阶段算法</strong></td>
+    <td>同一循环在不同阶段处理不同性质的数据。LZ 解压：literal copy（顺序）→ back-reference（按 offset 随机跳转）。</td>
+    <td><span class="fix-tag fix-no">不可</span> 只能时间分片标签</td>
   </tr>
   <tr>
-    <td><strong>函数指针 / 虚函数</strong></td>
-    <td>编译时无法确定调用目标；间接调用 (<code>call *%rax</code>) 必须走原 PC</td>
-    <td>qsort 回调、C++ 虚函数、插件系统</td>
-  </tr>
-  <tr>
-    <td><strong>动态库函数</strong></td>
-    <td>.so 在运行时通过 PLT 链接，编译时只有 stub</td>
-    <td>libc、第三方 .so</td>
-  </tr>
-  <tr>
-    <td><strong>递归函数</strong></td>
-    <td>无法完全内联（无限展开不可能）</td>
-    <td>树遍历、解析器、图算法</td>
-  </tr>
-  <tr>
-    <td><strong>过大函数</strong></td>
-    <td>超过 GCC 内联代价阈值，即使同 TU 也不内联</td>
-    <td>SPEC 巨型解释器函数（如 <code>S_regmatch</code>）</td>
+    <td>B4</td>
+    <td><strong>交替数据结构</strong></td>
+    <td>同一循环交替访问 A[i] 和 B[i]，模式在两者间快速切换。</td>
+    <td><span class="fix-tag fix-may">部分</span> loop fission 可拆分，但破坏局部性</td>
   </tr>
 </table>
 
-<p><strong>SPEC CPU2006 正是跨 TU 场景</strong>——<code>400.perlbench</code> 由数百个 <code>.c</code> 文件编译成 <code>.o</code> 再链接。跨 TU 调用无处不在。函数指针也同样存在（Perl 的 opcode dispatch）。</p>
+<!-- ════════════════════════════════════════════════════ -->
+<!--  两类对比                                         -->
+<!-- ════════════════════════════════════════════════════ -->
+<h2>两类对比</h2>
+
+<table>
+  <tr><th></th><th>类别 A（编译器因素）</th><th>类别 B（语义因素）</th></tr>
+  <tr>
+    <td>问题来源</td>
+    <td>多个调用方被迫共享同一个 PC</td>
+    <td>函数自身逻辑就包含多种模式</td>
+  </tr>
+  <tr>
+    <td>调用方数量</td>
+    <td>多个（或通过指针间接调用）</td>
+    <td>可以只有一个</td>
+  </tr>
+  <tr>
+    <td>能否被编译优化消解</td>
+    <td>部分可以（LTO、PGO、静态链接）</td>
+    <td>大部分不能</td>
+  </tr>
+  <tr>
+    <td>应对策略</td>
+    <td>LTO、PGO、合并源文件</td>
+    <td>soft label、时间分片、call-chain 特征</td>
+  </tr>
+</table>
 
 <!-- ════════════════════════════════════════════════════ -->
-<!--  对 Pipeline 的影响                                -->
+<!--  Pipeline 影响                                    -->
 <!-- ════════════════════════════════════════════════════ -->
 <h2>对 Profiling Pipeline 的影响</h2>
 
-<h3>当前状态</h3>
+<p>当前 Stage 6 对每个 PC 产出单一 <code>best_prefetch</code> 标签。在上述 9 种情况下，这个标签都是多种模式的折中值。</p>
 
-<p>Stage 6 对每个 PC 产出单一 <code>best_prefetch</code> 标签。在跨 TU 场景下，PC 的 AMAT 记录混合了多种模式。选出的"最优"实际上是对不同步长/模式的折中值。</p>
-
-<h3>排查方法</h3>
-
-<p>当某个 benchmark 的 GBDT 精度异常低时：</p>
+<h3>排查步骤</h3>
 
 <div class="note-group">
   <div class="note">
-    <strong>1. 检查 AMAT 分布</strong> — 该 PC 在不同 prefetcher 下的 AMAT 是否都没有明显最优？如果有多个 prefetcher 打平，说明该 PC 的模式不稳定。
+    <strong>1. 检查 AMAT 分布</strong> — 该 PC 在各 prefetcher 下的 AMAT 是否都没有明显最优？多个 prefetcher 打平说明模式不稳定。
   </div>
   <div class="note">
-    <strong>2. 检查调用来源</strong> — <code>objdump -d binary | grep 'call.*&lt;func&gt;'</code> 看该函数被多少处调用。如果多于 1 处，且参数不同，就可能存在相位混合。
+    <strong>2. 检查调用来源</strong> — <code>objdump -d binary | grep 'call.*&lt;func&gt;'</code> 看该函数是否被多处调用。多于 1 处 → 可能是 A1。
   </div>
   <div class="note">
-    <strong>3. 检查间接访问模式</strong> — 该 PC 是否通过 indirection 数组（<code>arr[indices[i]]</code>）访问数据？indices 的内容在不同阶段是否变化？
+    <strong>3. 检查间接访问</strong> — 该 PC 是否通过 <code>arr[indices[i]]</code> 模式访问？indices 在不同阶段是否变化？→ 可能是 B2。
+  </div>
+  <div class="note">
+    <strong>4. 分情况应对</strong> — A1 尝试 LTO 重编译。A2 尝试 PGO。B 类考虑 soft label 或引入 call-chain 上下文作为训练特征。
   </div>
 </div>
 
-<h3>可能的改进方向</h3>
+<h3>应对策略</h3>
 
-<table class="strat-table">
-  <tr><th>方案</th><th>适用场景</th><th>复杂度</th></tr>
-  <tr>
-    <td>PC + call-chain 上下文</td>
-    <td>同一函数被多处不同参数调用</td>
-    <td>需修改 profiler 记录 call stack</td>
-  </tr>
-  <tr>
-    <td>按时间分片标签</td>
-    <td>同一函数在不同执行阶段模式不同</td>
-    <td>需 SimPoints 级标签划分</td>
-  </tr>
-  <tr>
-    <td>多标签 / soft label</td>
-    <td>PC 存在内在多义性</td>
-    <td>训练目标从分类改为概率分布</td>
-  </tr>
-  <tr>
-    <td>开启 LTO 编译</td>
-    <td>消除跨 TU 内联障碍</td>
-    <td>编译流程变更，SPEC 需适配</td>
-  </tr>
+<table>
+  <tr><th>方案</th><th>适用</th><th>复杂度</th></tr>
+  <tr><td><strong>开启 LTO 编译</strong></td><td>A1 跨 TU 调用</td><td>改编译脚本即可</td></tr>
+  <tr><td><strong>PGO 引导内联</strong></td><td>A2 函数指针、A4 超大函数</td><td>需 profile run + 重编译</td></tr>
+  <tr><td><strong>PC + call-chain 上下文</strong></td><td>B1 参数变化、B2 间接索引</td><td>需修改 profiler 记录 call stack</td></tr>
+  <tr><td><strong>按时间分片标签</strong></td><td>B3 多阶段算法</td><td>需 SimPoints 级标签划分</td></tr>
+  <tr><td><strong>Soft label</strong></td><td>B 类通用</td><td>训练目标从分类改为概率分布</td></tr>
 </table>
 
 <!-- ════════════════════════════════════════════════════ -->
-<!--  可复现实验                                        -->
+<!--  可复现实验                                       -->
 <!-- ════════════════════════════════════════════════════ -->
 <h2>可复现实验</h2>
 
-<p>三文件完整源码（<code>worker.h</code> + <code>worker.c</code> + <code>main.c</code>）：</p>
+<p>完整源码在 <code>snippets/</code> 下：</p>
 
 <div class="cmd-box">
-<span class="comment"># worker.h</span><br>
-int sum_strided(int *arr, int n, int stride);<br>
-int sum_indirect(int *arr, int *indices, int n);<br><br>
-<span class="comment"># worker.c — 另一个编译单元</span><br>
-int sum_strided(int *arr, int n, int stride) {<br>
-&nbsp;&nbsp;int sum = 0;<br>
-&nbsp;&nbsp;for (int i = 0; i &lt; n; i += stride) sum += arr[i];<br>
-&nbsp;&nbsp;return sum;<br>
-}<br>
-int sum_indirect(int *arr, int *indices, int n) {<br>
-&nbsp;&nbsp;int sum = 0;<br>
-&nbsp;&nbsp;for (int i = 0; i &lt; n; i++) sum += arr[indices[i]];<br>
-&nbsp;&nbsp;return sum;<br>
-}<br><br>
-<span class="comment"># main.c — 调用方：3 种 stride + 2 种 indices 模式</span><br>
-<span class="comment"># (完整代码见 snippets/)</span>
-</div>
-
-<div class="cmd-box">
-<span class="comment"># 编译 & 验证</span><br>
+<span class="comment"># A1: 跨编译单元 — 3 种 stride 共享 1 个 PC</span><br>
 <span class="prompt">$</span> gcc -no-pie -O2 -c worker.c -o worker.o<br>
 <span class="prompt">$</span> gcc -no-pie -O2 -c main.c   -o main.o<br>
 <span class="prompt">$</span> gcc -no-pie worker.o main.o -o demo<br>
 <span class="prompt">$</span> objdump -d demo | grep 'call.*sum_strided'<br>
-<span style="color:var(--muted)"># 输出三行 call 4013d0 &lt;sum_strided&gt; — 全部指向同一地址</span><br>
-<span class="prompt">$</span> objdump -d demo | grep 'call.*sum_indirect'<br>
-<span style="color:var(--muted)"># 输出两行 call 401410 &lt;sum_indirect&gt; — 全部指向同一地址</span>
+<span style="color:var(--muted)"># 输出三行 call 4013d0 &lt;sum_strided&gt; — 全部指向同一地址</span><br><br>
+<span class="comment"># A2: 函数指针 — qsort 回调 cmp_func</span><br>
+<span class="prompt">$</span> gcc -no-pie -O2 -g qsort_demo.c -o qsort_demo<br>
+<span class="prompt">$</span> objdump -d qsort_demo | grep -A8 '&lt;cmp_func&gt;'<br>
+<span style="color:var(--muted)"># 两条 load PC 在 qsort 内部被通过指针重复调用几万次</span>
 </div>
 
-<p style="font-size:.82rem;color:var(--muted);margin-top:1rem;"><code>-no-pie</code> 下代码段 PC 固定。stack 地址因 ASLR 每次不同，但 delta 值和反汇编完全可复现。</p>
+<p style="font-size:.82rem;color:var(--muted);margin-top:1rem;"><code>-no-pie</code> 下代码段 PC 固定，可复现。stack 地址因 ASLR 每次不同，但 delta 值一致。</p>
 
 <footer>
-  <p>本文源于对 "per-PC label 在真实多文件代码库中是否可靠" 的追问。结论：跨编译单元的函数调用是最常见且最自然的相位冲突来源——编译器无 LTO 时完全无法内联，同一个 PC 的 profiler 标签必然混合多种访存模式。了解这一点有助于在排查训练精度异常时定位根因。</p>
+  <p>本文源于对 "per-PC label 在真实代码库中是否可靠" 的系统性追问。PC 相位冲突可归为两大类 9 种情况：编译器因素（5 种，部分可消解）和语义因素（4 种，基本不可消解）。了解每种情况的机制和边界，是排查训练精度异常的基础。</p>
 </footer>
 
 </body>

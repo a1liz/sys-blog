@@ -1,50 +1,75 @@
 ---
-title: "同一个 PC 的相位冲突 —— 跨编译单元的函数调用如何污染训练标签"
+title: "同一个 PC 的相位冲突 —— 完整分类与可复现案例"
 date: 2026-05-14
-tags: [performance, cpu, cache, profiling, assembly, compiler, training-data, link-time]
+tags: [performance, cpu, cache, profiling, assembly, compiler, training-data]
 category: "performance"
-summary: "在真实多文件项目中，跨 .o 的函数调用无法被编译器内联，导致同一个 load PC 在不同执行阶段呈现截然不同的访存模式——从顺序 (+4) 到稀疏 (+64)，甚至从顺序访问切换到随机访问。通过两个无 hack 的跨编译单元实验展示相位冲突的产生机制，以及内联如何消解它。"
+summary: "同一 load PC 在不同执行阶段可能呈现截然不同的访存模式。分成两大类：编译器因素（跨文件编译、函数指针、超大函数等 5 种）和语义因素（参数变化、间接索引、多阶段算法等 4 种）。通过跨编译单元和 qsort 函数指针两个实验证明，给出排查策略。"
 ---
 
 <!-- 正文 -->
 
-## 问题
+## 先解释几个缩写
 
-在 ChampSim profiling pipeline 中，Stage 6 对每个 PC 产出一个 `best_prefetch` 标签。这隐含一个前提：**同一个 PC 的访存模式是稳定的**。
+后面会反复出现，先说清楚：
 
-但如果同一个 PC 在不同执行阶段表现出完全不同的访存模式呢？会出现 **PC 粒度的相位冲突**（phase conflict）：同一个 PC 的 profiler 记录混合了多种模式，任何单一 prefetcher 都无法对其全部最优。
+**TU（Translation Unit / 编译单元）**：一个 `.c` 文件经过预处理器展开后的产物。`gcc -c foo.c` 编译一个 TU，产出 `foo.o`。大多数项目由几十上百个 TU 组成，编译时每个 TU 各自独立处理。
 
-什么时候会发生？我们先做一个真实的对照实验。
+**LTO（Link-Time Optimization / 链接时优化）**：把优化推迟到链接阶段。不加 LTO 时，`gcc -c a.c` 完全看不到 `b.c` 里的函数体。加 `-flto` 后，链接器拿到所有 `.o` 的中间表示，可以跨文件内联。
+
+**PGO（Profile-Guided Optimization / 剖面引导优化）**：先跑一遍程序收集热点数据，再基于这份数据重编译。可以帮编译器判断"这个函数指针实际指向谁"或"这个函数值不值得内联"，从而做出更优决策。
+
+**PLT（Procedure Linkage Table / 过程链接表）**：动态库（`.so`）的跳板。程序调用 `memcpy` 时，先跳到 PLT 里的一条 stub，stub 再通过 GOT 跳到真正的 `memcpy` 实现。调用方的 `call` 指令指向的是 PLT stub 的固定 PC。
 
 ---
 
-## 实验设置：跨编译单元模拟真实代码库
+## 问题
 
-真实项目（SPEC、Linux kernel、任何多文件 C 项目）中，函数分布在不同的 `.c` 文件里。编译时每个 `.c` → `.o` 各自编译，链接时拼在一起。**跨 `.o` 的函数调用，编译器在 `-O2` 下无法内联**（除非开启 LTO）。
+在 ChampSim profiling pipeline 中，每条 load 指令由一个 PC 标识。Stage 6 对每个 PC 产出一个 `best_prefetch` 标签，隐含假设：**同一 PC 的访存模式是稳定的**。
 
-这就是最自然的"同一 PC 出现多种模式"的来源。
+但同一个 PC 完全可能在不同时间表现出不同的访存模式。以下是所有可能性的完整分类。
 
-### 目录结构
+---
 
+## 分类总览
+
+```
+           PC 相位冲突（同一 load PC，多种访存模式）
+                    │
+    ┌───────────────┴───────────────┐
+    │                               │
+  类别 A：编译器因素              类别 B：语义因素
+  多个调用上下文被合并             函数自身逻辑就是多模的
+  ┌─────────────────────┐         ┌─────────────────────┐
+  │ A1 跨 TU 编译       │         │ B1 参数随时间变化   │
+  │ A2 函数指针/虚函数  │         │ B2 间接索引访问     │
+  │ A3 动态库函数       │         │ B3 多阶段算法       │
+  │ A4 函数体过大       │         │ B4 交替数据结构     │
+  │ A5 递归函数         │         │                     │
+  └─────────────────────┘         └─────────────────────┘
+```
+
+---
+
+## 类别 A：编译器因素——多个调用上下文被迫共享一个 PC
+
+这类冲突的本质是：程序员写了多个不同的调用，每个调用本应有各自的访存模式，但编译器**做不到**或**选择不**为它们生成独立的副本，导致它们被迫共享同一个 PC。
+
+---
+
+### A1：跨编译单元调用（无 LTO）
+
+**本质**：函数体在另一个 `.c` 文件里。不加 LTO 时，编译器在处理调用方这个 TU 的时候，根本看不见被调函数的函数体，只能生成一个 `call` 指令指向外部符号。所有调用方共享同一个 PC。
+
+**实验：worker.c + main.c 分文件编译**
+
+源码目录：
 ```
 worker.h   — 函数声明
 worker.c   — 实现在另一个编译单元
 main.c     — 调用方
 ```
 
-编译命令（无 LTO）：
-```bash
-gcc -no-pie -O2 -c worker.c -o worker.o
-gcc -no-pie -O2 -c main.c   -o main.o
-gcc -no-pie worker.o main.o -o demo
-```
-
----
-
-## 案例 1：同一 PC，三种不同的 stride —— `sum_strided`
-
-### worker.c（另一个编译单元）
-
+`worker.c`（另一个编译单元）：
 ```c
 int sum_strided(int *arr, int n, int stride) {
     int sum = 0;
@@ -55,208 +80,240 @@ int sum_strided(int *arr, int n, int stride) {
 }
 ```
 
-### main.c
-
+`main.c`：
 ```c
-volatile int r1 = sum_strided(data, 512, 1);   // stride=1 → 顺序访问  (+4/iter)
-volatile int r2 = sum_strided(data, 512, 4);   // stride=4 → 跨步访问  (+16/iter)
-volatile int r3 = sum_strided(data, 512, 16);  // stride=16→ 稀疏访问  (+64/iter)
+volatile int r1 = sum_strided(data, 512, 1);   // stride=1 → 顺序  (+4/iter)
+volatile int r2 = sum_strided(data, 512, 4);   // stride=4 → 跨步  (+16/iter)
+volatile int r3 = sum_strided(data, 512, 16);  // stride=16→ 稀疏  (+64/iter)
 ```
 
-### 反汇编
+编译命令（无 LTO）：
+```bash
+gcc -no-pie -O2 -c worker.c -o worker.o
+gcc -no-pie -O2 -c main.c   -o main.o
+gcc -no-pie worker.o main.o -o demo
+```
 
-`worker.o` 中的 `sum_strided`（PC 固定，在链接后的 `demo` 二进制中位于 `0x4013d0`）：
+反汇编 `main.o` 中的调用方：
+```asm
+  401166:  call   4013d0 <sum_strided>    ; stride=1  → 步进 +4/iter
+  401193:  call   4013d0 <sum_strided>    ; stride=4  → 步进 +16/iter
+  4011c0:  call   4013d0 <sum_strided>    ; stride=16 → 步进 +64/iter
+```
+
+三处 `call 4013d0` 全部指向同一地址。`sum_strided` 内部的 load 指令在 `0x4013ea`：
 
 ```asm
 00000000004013d0 <sum_strided>:
-  4013d8:  movslq %edx,%r8           ; stride → r8 (符号扩展)
-  4013df:  shl    $0x2,%r8            ; r8 = stride * 4 (字节偏移)
-  4013e3:  nopl   0x0(%rax,%rax,1)
+  4013d8:  movslq %edx,%r8           ; stride → r8
+  4013df:  shl    $0x2,%r8            ; r8 = stride * 4（字节偏移）
   4013e8:  add    %edx,%eax           ; i += stride
-  4013ea:  add    (%rdi),%ecx         ; ← 唯一的 Load PC: 0x4013ea
+  4013ea:  add    (%rdi),%ecx         ; ← 唯一的 Load PC：0x4013ea
   4013ec:  add    %r8,%rdi            ; rdi += stride*4
   4013f1:  jg     4013e8              ; loop
 ```
 
-`main.o` 中的三处调用（共享同一 PC `0x4013ea`）：
-
-```asm
-  401166:  call   4013d0 <sum_strided>    ; stride=1  → r8=4  (步进 +4/iter)
-  401193:  call   4013d0 <sum_strided>    ; stride=4  → r8=16 (步进 +16/iter)
-  4011c0:  call   4013d0 <sum_strided>    ; stride=16 → r8=64 (步进 +64/iter)
-```
-
-### 运行时地址 Trace（在 `sum_strided` 中插桩打印）
+运行时地址 trace：
 
 ```
-=== stride=1 (sequential) ===        === stride=4 (strided) ===
-arr[0]  @ 0x...570                   arr[0]  @ 0x...570
-arr[1]  @ 0x...574  ← +4            arr[4]  @ 0x...580  ← +16
-arr[2]  @ 0x...578  ← +4            arr[8]  @ 0x...590  ← +16
-arr[3]  @ 0x...57c  ← +4            arr[12] @ 0x...5a0  ← +16
-
-=== stride=16 (sparse) ===
-arr[0]  @ 0x...570
-arr[16] @ 0x...5b0  ← +64
-arr[32] @ 0x...5f0  ← +64
+stride=1 (顺序)           stride=4 (跨步)           stride=16 (稀疏)
+arr[0]  @ ...570         arr[0]  @ ...570         arr[0]  @ ...570
+arr[1]  @ ...574  +4     arr[4]  @ ...580  +16    arr[16] @ ...5b0  +64
+arr[2]  @ ...578  +4     arr[8]  @ ...590  +16    arr[32] @ ...5f0  +64
+arr[3]  @ ...57c  +4     arr[12] @ ...5a0  +16    arr[48] @ ...630  +64
 ```
 
-| 调用 | stride 参数 | 地址 delta | r8 寄存器值 | 访存特征 |
-|---|---|---|---|---|
-| r1 | 1 | +4 | 4 | 密集顺序 |
-| r2 | 4 | +16 | 16 | 跨步 |
-| r3 | 16 | +64 | 64 | 稀疏 |
+**后果**：PC `0x4013ea` 在 profiler 中混合了三种 stride 的 AMAT 记录。如果 `next_line` 对 +4 最优，它对 +64 几乎完全无用。选出的 `best_prefetch` 是对三种模式的折中值。
 
-**结果**：PC `0x4013ea` 的 profiler 记录中混合了三种完全不同的地址步长。如果 `next_line` 对顺序访问最优，它对稀疏访问可能完全无用。
+**能否消解**：✅ 加 `-flto`，或把函数体移到同一个 `.c` 文件。
 
 ---
 
-## 案例 2：同一 PC，顺序访问 vs 随机访问 —— `sum_indirect`
+### A2：函数指针 / 虚函数
 
-这是更极端的情况：同一个 load PC，访问模式在**顺序遍历**和**随机跳转**之间切换。
+**本质**：`call *%rax` 跳到哪里去，编译器静态分析推不出来。即使函数体在同一个 TU 内、编译器完全看得到，也不知道该内联谁。
 
-### worker.c
+**实验：qsort 调用 cmp_func**
+
+`cmp_func` 的地址被传给 C 标准库的 `qsort`。`qsort` 内部通过函数指针调用它——这个间接调用发生在 libc 的 `.so` 里，编译时不可能被消解。
+
+```c
+int cmp_func(const void *a, const void *b) {
+    int va = *(const int *)a;  // ← LOAD PC #1：a 指向哪里，由 qsort 的分区算法决定
+    int vb = *(const int *)b;  // ← LOAD PC #2：b 同样跳来跳去
+    return (va > vb) - (va < vb);
+}
+```
+
+```c
+qsort(data, 512, sizeof(int), cmp_func);
+```
+
+反汇编 `cmp_func`：
+```asm
+0000000000401320 <cmp_func>:
+  401324:  mov    (%rsi),%eax        ; ← Load PC #1：b 的值
+  401326:  cmp    %eax,(%rdi)        ; ← Load PC #2：a 的值（cmp 隐含 load）
+  40132e:  movzbl %dl,%edx
+  401334:  sub    %edx,%eax
+  401336:  ret
+```
+
+PC `0x401324` 和 `0x401326` 在 qsort 执行期间会被调用几万次，`a` 和 `b` 的地址由 qsort 内部的快排分区算法决定——一会儿指向数组左端（比较 pivot），一会儿指向右端（分区交换），一会儿递归进入子数组。访存模式完全随机。
+
+**能否消解**：⚠️ PGO 可以告诉编译器"这个函数指针 99% 指向 cmp_func"，然后做 speculative devirtualization（生成 `if (fp == cmp_func) call cmp_func else call *fp`）。但这是概率性的，不保证。
+
+---
+
+### A3：动态库函数
+
+**本质**：`.so` 在运行时加载，编译时链接的只是一个 PLT stub。程序里所有 `call memcpy@plt` 都指向同一个 stub PC。
+
+**能否消解**：✅ 静态链接（`.a` 替代 `.so`），或利用 IFUNC resolver 在加载时选择特定实现。
+
+### A4：函数体过大
+
+**本质**：即使函数体在同 TU 内、gcc 完全看得到，如果函数太大（几千行，多层循环），内联后的代码膨胀远超收益，gcc 会拒绝内联。SPEC 中的巨型函数如 `S_regmatch`（perlbench 的核心正则匹配循环）就是典型。
+
+**能否消解**：⚠️ LTO + PGO 可以让编译器更准确地估算热度，裁掉冷路径后内联热路径。
+
+### A5：递归函数
+
+**本质**：理论上不可能完全展开为有限层。同一个 PC 在不同递归深度访问不同的树节点/链表节点。
+
+**能否消解**：⚠️ 尾递归可以被优化为迭代（消除递归），一般递归无法完全拆 PC。
+
+---
+
+## 类别 B：语义因素——函数自身逻辑天然是多模式的
+
+这类冲突的本质是：**不是谁的调用、怎么编译的问题，而是函数本身的语义就决定了同一个 PC 会在不同时间做不同的事**。
+
+---
+
+### B1：同一 call site，参数随时间变化
+
+**本质**：和前一类不同——这里只有**一个** call site（汇编里一条 `call` 指令），没有多个调用方。但参数值（比如 `stride`）在不同时间传入的值不同，导致同一 PC 的访存模式随时间漂移。
+
+```c
+// 只有一个 call site，但 stride 来自一个变化的数据源
+int strides[] = {1, 4, 16};
+for (int phase = 0; phase < 3; phase++) {
+    sum_strided(data, 512, strides[phase]);  // 同一个 call，不同参数
+}
+```
+
+汇编里就一条 `call sum_strided`，编译器不可能为 `stride=1`、`stride=4`、`stride=16` 各生成一份 `sum_strided` 的副本——参数值在运行时才确定，静态分析推不出来。
+
+更常见的真实场景：一个图像处理函数，`kernel_size` 由用户输入或配置文件指定。同一个高斯模糊函数，跑 `kernel=3` 时访存模式是密集邻域，跑 `kernel=15` 时是稀疏大跨度。
+
+**能否消解**：❌ 编译器不能为每种可能的参数值生成一个函数副本。
+
+---
+
+### B2：间接索引访问（data-dependent index）
+
+**本质**：访问地址 = `base + indices[i] * sizeof(T)`。`indices` 的内容是运行时数据，编译器完全无法预测。
 
 ```c
 int sum_indirect(int *arr, int *indices, int n) {
     int sum = 0;
     for (int i = 0; i < n; i++) {
-        sum += arr[indices[i]];  // ← 关键的 Load PC
-    }                            // indices内容决定arr的访问模式
-    return sum;
+        sum += arr[indices[i]];  // ← 唯一的 Load PC
+    }                            // indices 顺序 → 顺序访问 arr
+    return sum;                  // indices 随机 → 随机访问 arr
 }
 ```
 
-### main.c
-
-```c
-// Phase A: indices = [0,1,2,...] → 顺序访问 arr
-for (int i = 0; i < 512; i++) indices[i] = i;
-volatile int r4 = sum_indirect(data, indices, 512);
-
-// Phase B: indices 随机打乱 → 随机访问 arr
-shuffle(indices);
-volatile int r5 = sum_indirect(data, indices, 512);
-```
-
-### 反汇编
-
+反汇编：
 ```asm
 0000000000401410 <sum_indirect>:
-  401418:  movslq %edx,%rdx
-  40141d:  lea    (%rsi,%rdx,4),%rcx   ; &indices[n] (循环边界)
-  401428:  movslq (%rsi),%rdx           ; rdx = indices[i] (符号扩展)
-  40142b:  add    $0x4,%rsi             ; i++ (遍历 indices 数组)
-  40142f:  add    (%rdi,%rdx,4),%eax    ; ← 唯一的 Load PC: 0x40142f
-  401432:  cmp    %rsi,%rcx             ;        arr[indices[i]]
+  401428:  movslq (%rsi),%rdx           ; rdx = indices[i]
+  40142b:  add    $0x4,%rsi             ; i++
+  40142f:  add    (%rdi,%rdx,4),%eax    ; ← 唯一的 Load PC：0x40142f
+  401432:  cmp    %rsi,%rcx             ;     arr[indices[i]]
   401435:  jne    401428                ; loop
 ```
 
-### 运行时地址 trace
+运行时：
 
 ```
-=== Phase A: indices sequential ===  === Phase B: indices shuffled ===
-indices[0]=0    arr[0] @ 0x...a70    indices[0]=387  arr[387] @ 0x...d7c  ← 大跳
-indices[1]=1    arr[1] @ 0x...a74    indices[1]=12   arr[12]  @ 0x...a90  ← 回跳
-indices[2]=2    arr[2] @ 0x...a78    indices[2]=501  arr[501] @ 0x...f74  ← 又大跳
-indices[3]=3    arr[3] @ 0x...a7c    indices[3]=88   arr[88]  @ 0x...bc0  ← 回跳
+Phase A: indices = [0, 1, 2, 3, ...]
+indices[0]=0    arr[0] @ ...a70
+indices[1]=1    arr[1] @ ...a74   ← +4（顺序）
+indices[2]=2    arr[2] @ ...a78   ← +4
+
+Phase B: indices = [387, 12, 501, 88, ...]（随机打乱）
+indices[0]=387  arr[387] @ ...d7c
+indices[1]=12   arr[12]  @ ...a90   ← 大跳回
+indices[2]=501  arr[501] @ ...f74   ← 又大跳
 ```
 
-| 阶段 | indices 内容 | arr 访问模式 | 适合的 prefetcher |
-|---|---|---|---|
-| A | `[0,1,2,3,...]` | 严格顺序 (+4/iter) | `next_line` |
-| B | 随机排列 | 完全随机跳转 | `no` (任何预取都是浪费) |
+同一个 PC `0x40142f`，Phase A 是完美顺序（适合 `next_line`），Phase B 是完全随机（什么都不做最好）。profiler 记录会混合两者，单一标签无法覆盖。
 
-PC `0x40142f` 的 profiler 记录中混合了两种截然不同的访存模式。单一 prefetcher 无法同时覆盖。
+这种模式在真实代码中极其常见：稀疏矩阵的列索引遍历、哈希表的 bucket chain、图的邻接表——只要是"通过索引数组间接访问另一个数组"的模式，都属于此类。
+
+**能否消解**：❌ 编译器无法预测运行时数据的内容。
 
 ---
 
-## 什么情况下内联可以解决，什么情况下不行
+### B3：多阶段算法
 
-### 自然消解：同编译单元内被内联
+**本质**：同一个循环，但程序逻辑在不同阶段处理不同性质的数据。
 
-如果 `sum_strided` 定义在 `main.c` 中（同 TU），gcc -O2 会将其内联。三个 call site 各自生成独立的 `add (%rax),%edx` / `add (%rbx),%eax` 指令，**三个不同的 PC**——标签冲突自然消失。
+典型的如 LZ 系列解压算法：literal copy 阶段是顺序访问，back-reference copy 阶段是从已输出数据中按 offset 随机跳转。两个阶段运行在同一个循环体、同一个 load PC 上。
 
-这是上一版文章的核心结论，不再展开。
+**能否消解**：❌ 一个循环就是同一个 PC，不可能按阶段拆分。只能靠 profiling 的时间分片标签或 soft label。
 
-### 无法消解的真实场景
+### B4：交替数据结构
 
-| 场景 | 为什么 | 常见程度 |
+**本质**：同一个循环体交替访问两个不同数组，访问模式在两者间快速切换。
+
+**能否消解**：⚠️ loop fission（把一个循环拆成两个）可以分离，但这会破坏数据局部性，属于手动权衡。
+
+---
+
+## 两类对比
+
+| | 类别 A（编译器因素） | 类别 B（语义因素） |
 |---|---|---|
-| **跨编译单元调用** | 无 LTO 时编译器看不见函数体 | 几乎所有多文件项目 |
-| **函数指针 / 虚函数** | 编译时无法确定调用目标 | qsort 回调、C++ 虚函数、插件系统 |
-| **动态库函数** | .so 在运行时链接 | `libc`、第三方库 |
-| **递归函数** | 无法完全内联 | 树遍历、解析器、图形算法 |
-| **过大函数** | 超过内联代价阈值 | SPEC 中的巨型解释器函数（如 `S_regmatch`） |
-
-**SPEC CPU2006 正是这种场景**——`400.perlbench` 由数百个 `.c` 文件编译成 `.o` 再链接，跨 TU 调用无处不在。
+| 问题来源 | 多个调用方被迫共享同一个 PC | 函数自身逻辑就包含多种模式 |
+| 调用方数量 | 多个（或通过指针间接调用） | 可以只有一个 |
+| 能否被编译优化消解 | 部分可以（LTO、PGO、静态链接） | 大部分不能 |
+| 应对策略 | LTO、PGO、合并源文件、手动内联 | soft label、时间分片、call-chain 特征 |
 
 ---
 
 ## 对 Profiling Pipeline 的影响
 
-### pipeline 现状
+当前 Stage 6 对每个 PC 产出单一 `best_prefetch` 标签。在上述任何场景下，这个标签都可能是多种模式的折中。
 
-当前 Stage 6 (`aggregate_ground_truth.py`) 对每个 PC 产出单一 `best_prefetch` 标签。在跨 TU 场景下，PC 的 AMAT 记录混合了多种模式，选出的"最优"其实是折中值。
+**排查步骤**（当某 benchmark 的 GBDT 精度异常低时）：
 
-### 排查方法
-
-如果某个 benchmark 的 GBDT 精度异常低：
-
-1. **检查混合度**—拉出该 PC 在不同 prefetcher 下的 AMAT 分布。如果所有 prefetcher 都表现平平（没有明显最优），可能该 PC 的访问模式不稳定。
-2. **检查调用来源**—该 PC 对应的函数是否被多处以不同参数调用。`objdump -d` 中 `call <func>` 的出现次数直接说明。
-3. **按调用上下文拆分**—如果确认是相位冲突，可引入 **call-chain context** 作为额外特征（PC + 返回地址），让模型感知"这个 PC 是在哪个调用路径下执行的"。
-
-### 可能的改进方向
-
-| 方案 | 适用场景 | 复杂度 |
-|---|---|---|
-| PC + call-chain 上下文 | 同一函数被多处不同参数调用 | 需修改 profiler 记录 call stack |
-| 按时间分片标签 | 同一函数在不同执行阶段模式不同 | 需 SimPoints 级标签划分 |
-| 多标签输出 | 给模型输出 "60% next_line, 40% no" 的概率分布 | 训练目标改为 soft label |
+1. 拉出该 PC 在各 prefetcher 下的 AMAT 分布。如果所有 prefetcher 表现平平（没有明显胜者），说明模式不稳定。
+2. `objdump -d binary | grep 'call.*<func>'` 看该函数是否有多个 call site。
+3. 看该函数内部是否用了间接索引（`arr[indices[i]]`）、或在不同阶段切换行为。
+4. 如果是类别 A → 尝试开 LTO 重编译。如果是类别 B → 考虑在训练数据中引入 call-chain 上下文或 soft label。
 
 ---
 
 ## 可复现实验
 
-完整源码（三文件）：
+完整源码在 `snippets/` 下：
 
 ```bash
-# worker.h
-int sum_strided(int *arr, int n, int stride);
-int sum_indirect(int *arr, int *indices, int n);
-
-# worker.c — 实现在另一个编译单元
-int sum_strided(int *arr, int n, int stride) {
-    int sum = 0;
-    for (int i = 0; i < n; i += stride) { sum += arr[i]; }
-    return sum;
-}
-int sum_indirect(int *arr, int *indices, int n) {
-    int sum = 0;
-    for (int i = 0; i < n; i++) { sum += arr[indices[i]]; }
-    return sum;
-}
-
-# main.c — 调用方
-// 三处调用 sum_strided: stride=1, 4, 16
-// 两处调用 sum_indirect: indices顺序, indices随机
-```
-
-编译与验证：
-
-```bash
+# A1: 跨编译单元 —— 3 种 stride 共享 1 个 PC
 gcc -no-pie -O2 -c worker.c -o worker.o
 gcc -no-pie -O2 -c main.c   -o main.o
 gcc -no-pie worker.o main.o -o demo
+objdump -d demo | grep 'call.*sum_strided'   # 三处全部指向同一 PC
 
-# 验证跨 TU 调用无法内联：三处 call 共享同一 PC
-objdump -d demo | grep 'call.*sum_strided'
-# 输出三行 call 4013d0 <sum_strided>，全部指向同一地址
+# A2: 函数指针 —— qsort 回调 cmp_func
+gcc -no-pie -O2 -g qsort_demo.c -o qsort_demo
+objdump -d qsort_demo | grep -A8 '<cmp_func>' # 两条 load PC
+# cmp_func 的 load PC 在 qsort 内部被通过指针重复调用几万次
 ```
-
-所有输出均可复现（代码段 PC 因 `-no-pie` 固定）。
 
 ---
 
-*本文源于对 "per-PC label 在真实代码库中是否可靠" 的追问。结论：跨编译单元的函数调用是最常见且最自然的相位冲突来源——编译器无 LTO 时完全无法内联，同一个 PC 的标签必然混合多种访存模式。了解这一点有助于在排查训练精度异常时定位根因。*
+*本文源于对 "per-PC label 在真实代码库中是否可靠" 的系统性追问。PC 相位冲突可归为两大类 9 种情况：编译器因素（5 种，部分可消解）和语义因素（4 种，基本不可消解）。了解每种情况的机制和边界，是排查训练精度异常的基础。*

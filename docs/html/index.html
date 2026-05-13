@@ -113,7 +113,7 @@
     <div class="post-card-left">
       <a href="posts/pc-phase-conflict.html" class="post-title">同一个 PC 的相位冲突 — 编译器 inline 展开如何拯救训练数据</a>
       <span class="post-summary">
-        同一个 <code>add (%rdi),%ecx</code>，三种 stride（+4, +16, +64）；同一个 <code>add (%rdi,%rdx,4),%eax</code>，顺序和随机交替。通过跨编译单元的多文件项目（无 LTO）演示相位冲突的产生与消解。
+        同一 load PC 在不同时机呈现截然不同的访存模式。两大类 9 种情况全分类：编译器因素（跨文件编译、函数指针等 5 种）和语义因素（参数变化、间接索引等 4 种）。附跨 TU 和 qsort 函数指针两个可复现实验。
       </span>
     </div>
     <div class="post-meta">
