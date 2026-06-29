@@ -111,6 +111,18 @@
 
   <div class="post-card">
     <div class="post-card-left">
+      <a href="posts/spec-bottleneck-analysis.html" class="post-title">为什么你的程序跑得慢？——用 perf + Pin ILP 给 SPEC CPU 2017 做一次「全身体检」</a>
+      <span class="post-summary">
+        对 SPEC 2017 全部 20 个 benchmark 进行 perf+Pin 交叉分析，将瓶颈分为 DEPENDENCY（依赖链）、MEMORY（缓存）和 FRONTEND（分支）。通过 perlbench、bwaves、omnetpp 等案例，用汇编级代码解释每种瓶颈的物理成因。
+      </span>
+    </div>
+    <div class="post-meta">
+      <span class="post-tag">performance</span>
+    </div>
+  </div>
+
+  <div class="post-card">
+    <div class="post-card-left">
       <a href="posts/pc-phase-conflict.html" class="post-title">同一个 PC 的相位冲突 — 编译器 inline 展开如何拯救训练数据</a>
       <span class="post-summary">
         同一 load PC 在不同时机呈现截然不同的访存模式。两大类 9 种情况全分类：编译器因素（跨文件编译、函数指针等 5 种）和语义因素（参数变化、间接索引等 4 种）。附跨 TU 和 qsort 函数指针两个可复现实验。

@@ -38,7 +38,7 @@ templates/             # 文章模板
 （暂无文章）
 
 ### Performance
-（暂无文章）
+- [为什么你的程序跑得慢？——用 perf + Pin ILP 给 SPEC CPU 2017 做一次「全身体检」](posts/performance/spec-bottleneck-analysis.md) — SPEC 20 个 benchmark 的瓶颈分类：DEPENDENCY / MEMORY / FRONTEND
 
 ### Tools
 （暂无文章）
@@ -48,7 +48,7 @@ templates/             # 文章模板
 
 ## 最近更新
 
-（暂无文章）
+- 2026-06-29: [为什么你的程序跑得慢？——用 perf + Pin ILP 给 SPEC CPU 2017 做一次「全身体检」](posts/performance/spec-bottleneck-analysis.md)
 
 ## 使用方式
 
