@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>一块 KV Cache 的旅程:DGX Spark 上 GPU → pinned → SSD 的数据路径全取证</title>
+<link rel="stylesheet" href="../style.css">
+<style>
+  .hero { margin: 1rem 0 2rem; }
+  .hero .tagline { color: var(--muted); font-size: .95rem; line-height: 1.7; max-width: 720px; }
+
+  .insight-row {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: .85rem; margin: 1.5rem 0;
+  }
+  .insight-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 1rem 1.2rem;
+    transition: border-color var(--transition), transform var(--transition), box-shadow var(--transition);
+  }
+  .insight-card:hover {
+    border-color: var(--border-hi);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 24px rgba(0,0,0,0.25);
+  }
+  .insight-card .ic-num {
+    font-family: var(--font-mono);
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--accent-glow);
+  }
+  .insight-card h4 { margin: .3rem 0 .15rem; font-size: .92rem; color: var(--text-hi); }
+  .insight-card p { font-size: .82rem; color: var(--muted); line-height: 1.6; margin: 0; }
+
+  .asm-box {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem 1.3rem;
+    margin-bottom: 1rem;
+    font-family: var(--font-mono);
+    font-size: .82rem; line-height: 1.6;
+    overflow-x: auto; position: relative;
+  }
+  .asm-box::before {
+    content: 'log';
+    position: absolute; top: -1px; right: 1rem;
+    font-size: .65rem; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--muted); background: var(--code-bg);
+    padding: .15em .6em;
+    border: 1px solid var(--border); border-top: none;
+    border-radius: 0 0 4px 4px; font-family: var(--font-body);
+  }
+  .asm-box.no-tag::before { display: none; }
+  .asm-hl {
+    color: var(--accent-glow);
+    background: rgba(212,149,40,0.08);
+    display: inline-block; width: 100%;
+    padding: .12em 0; margin: .08em 0;
+    border-left: 3px solid var(--accent);
+    padding-left: .5rem;
+  }
+
+  .data-sample {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem 1.3rem;
+    margin: 1rem 0;
+    font-family: var(--font-mono);
+    font-size: .78rem;
+    line-height: 1.5;
+    overflow-x: auto;
+  }
+
+  .pipe-flow {
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 0;
+    flex-wrap: wrap;
+    padding: 1.5rem .5rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    margin: 1.5rem 0;
+    font-family: var(--font-mono);
+    font-size: .78rem;
+  }
+  .pipe-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: var(--surface-hi);
+    border: 1px solid var(--border-hi);
+    border-radius: var(--radius);
+    padding: .7rem .9rem;
+    min-width: 130px;
+    text-align: center;
+    transition: border-color var(--transition), box-shadow var(--transition);
+  }
+  .pipe-step:hover { border-color: var(--accent); box-shadow: 0 0 16px rgba(212,149,40,0.08); }
+  .pipe-step .ps-label { font-weight: 650; color: var(--text-hi); font-size: .82rem; margin-bottom: .2rem; }
+  .pipe-step .ps-desc  { color: var(--muted); font-size: .68rem; line-height: 1.4; }
+  .pipe-arrow {
+    display: flex; align-items: center;
+    color: var(--accent);
+    font-size: 1.1rem;
+    padding: 0 .4rem;
+    flex-shrink: 0;
+    margin-top: .5rem;
+    font-family: var(--font-body);
+  }
+
+  .example-block {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    margin: 1.5rem 0;
+    overflow: hidden;
+    transition: border-color var(--transition), box-shadow var(--transition);
+  }
+  .example-block:hover {
+    border-color: var(--border-hi);
+    box-shadow: 0 4px 28px rgba(0,0,0,0.25);
+  }
+  .example-hd {
+    background: var(--surface-hi);
+    padding: .75rem 1.2rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .example-title { font-weight: 650; font-size: .95rem; color: var(--text-hi); }
+  .example-badge {
+    font-size: .7rem;
+    font-weight: 700;
+    padding: .2em .6em;
+    border-radius: 10px;
+    white-space: nowrap;
+  }
+  .badge-win { background: var(--green-dim); color: var(--green); border: 1px solid rgba(122,158,72,0.2); }
+  .badge-gap { background: var(--red); color: #f0a8a0; border: 1px solid rgba(197,85,66,0.2); font-family: var(--font-mono); }
+  .example-body { padding: 1.2rem; }
+  .example-body p:first-child { margin-top: 0; }
+  .example-body p:last-child { margin-bottom: 0; }
+
+  .student-note {
+    background: var(--surface);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 var(--radius) var(--radius) 0;
+    padding: 1.1rem 1.3rem;
+    margin: 1.5rem 0;
+    color: var(--text);
+    font-size: .95rem;
+    line-height: 1.8;
+  }
+  .student-note strong { color: var(--accent-glow); }
+
+  table.bw-table td:last-child { font-family: var(--font-mono); color: var(--accent-glow); text-align: right; }
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="../index.html" class="brand">ASM Blog</a>
+  <a href="profiling-amat.html">AMAT × Prefetch</a>
+  <a href="pc-phase-conflict.html">PC 相位冲突</a>
+  <a href="address-space.html">地址空间</a>
+  <a href="dgx-spark-kv-offload-data-path.html" class="active">KV → SSD</a>
+</nav>
+
+<div class="hero">
+  <h1>一块 KV Cache 的旅程</h1>
+  <p class="tagline">
+    DGX Spark(GB10 UMA)上 GPU → pinned → SSD 的数据路径全取证 ——
+    用 <code>/proc/self/pagemap</code> 解析物理页帧、FIEMAP 解析 NVMe LBA、torch.profiler 抓真实 kernel。
+    实测 GPU↔DRAM 的 copy engine 约 55 GiB/s,pinned↔NVMe 的 O_DIRECT 达 7.8–9.5 GiB/s(buffered 的 3–13 倍),
+    并定位 LMCache 的真实搬运路径是「SM gather kernel + cudaMemcpyAsync」两级,而非一次 plain cudaMemcpy。
+  </p>
+</div>
+
+<!-- ── 三大结论卡片 ───────────────────────────────── -->
+<div class="insight-row">
+  <div class="insight-card">
+    <div class="ic-num">55 <span style="font-size:.9rem;">GiB/s</span></div>
+    <h4>hop ①④:GPU ↔ pinned</h4>
+    <p>SM gather kernel + copy engine memcpy,DRAM 内部搬家,不经过任何总线。</p>
+  </div>
+  <div class="insight-card">
+    <div class="ic-num">9.5 <span style="font-size:.9rem;">GiB/s</span></div>
+    <h4>hop ②③:pinned ↔ NVMe</h4>
+    <p>O_DIRECT 下 NVMe 控制器直接 DMA,CPU 只下命令;buffered 路径只有 0.7–2.8 GiB/s。</p>
+  </div>
+  <div class="insight-card">
+    <div class="ic-num">0</div>
+    <h4>真·GPU 直通 SSD</h4>
+    <p>GB10 无 PCIe BAR / P2P DMA,GDS 架构上不存在;两级 DMA 已是物理最优。</p>
+  </div>
+</div>
+
+<!-- ── 问题 ───────────────────────────────────────── -->
+<h2>问题:KV 放不下了,放 SSD 的代价是什么</h2>
+
+<p>双 DGX Spark 跑 DeepSeek V4 Flash(TP=2,FP8,300k 上下文),GPU KV 池受 <code>gpu_memory_utilization=0.85</code> 预算限制。UMA 架构下 CPU/GPU 共享同一片 128 GiB DRAM,"offload 到 CPU 内存"只是同片 DRAM 左右互搏,<strong>唯一的真实容量增量在 NVMe</strong>。</p>
+
+<p>于是接入了 LMCache(<code>LMCacheMPConnector</code> + 每节点 <code>lmcache server</code>,L2 fs adapter 落盘)。功能验证通过后,一个自然的问题:<em>数据到底是怎么从 GPU 跑到 SSD 的?每一跳谁搬的、多快、能不能不搬?</em></p>
+
+<p>本文用三件工具把这条路逐跳拆开取证:</p>
+
+<table>
+<tr><th>工具</th><th>回答的问题</th></tr>
+<tr><td><code>/proc/self/pagemap</code></td><td>pinned 缓冲的虚拟地址 → DRAM 物理页帧号</td></tr>
+<tr><td>FIEMAP ioctl</td><td>盘上文件偏移 → NVMe 物理块地址</td></tr>
+<tr><td><code>torch.profiler</code></td><td>GPU 侧真实启动的 kernel / memcpy 名字</td></tr>
+</table>
+
+<!-- ── 地图 ───────────────────────────────────────── -->
+<h2>地图:三个站点,三种地址</h2>
+
+<p>这趟旅程只有三个站点,每个站点有自己的"地址语言":</p>
+
+<table>
+<tr><th>站点</th><th>真实身份</th><th>类比</th><th>实测地址(本次取证)</th></tr>
+<tr><td>GPU 显存</td><td>KV 池,CUDA 驱动分配</td><td>工厂内部货架(厂内编号)</td><td>虚拟地址 <code>0x32ee00000</code></td></tr>
+<tr><td>pinned 页</td><td>L1 中转缓冲,cudaHostAlloc</td><td>市区仓库的<strong>锁定专区</strong></td><td>虚拟地址 <code>0x339200000</code> → 物理页帧 <code>0x1826354</code></td></tr>
+<tr><td>SSD 文件</td><td>NVMe 上的 <code>.data</code> 文件</td><td>郊区冷库(LBA 货位)</td><td>设备物理偏移 <code>0x13d5f000000</code>(LBA 2662301696)</td></tr>
+</table>
+
+<p>关键认知:DGX Spark(GB10)上<strong>前两个站点是同一片 DRAM 芯片</strong>,只是归属不同的分配器;第三个站点是真正的另一块硬件(三星 3.7TB NVMe)。</p>
+
+<p><code>/proc/self/maps</code> 里 pinned 缓冲长这样——cudaHostAlloc 的匿名映射:</p>
+
+<div class="asm-box no-tag">
+339200000-33a200000 rw-s 00000000 00:01 54307   /dev/zero (deleted)
+</div>
+
+<p>而 pagemap 显示它的页帧<strong>并不连续</strong>(内核零散发的 2 MiB 大页):</p>
+
+<div class="data-sample">
+VA 0x339200000  -&gt;  PFN 0x1826354  (物理地址 0x1826354000)  present=True
+VA 0x339600000  -&gt;  PFN 0x97c084   (物理地址 0x97c084000)   present=True
+VA 0x339a00000  -&gt;  PFN 0x1effa6c  (物理地址 0x1effa6c000)  present=True
+VA 0x339e00000  -&gt;  PFN 0xdeb16c   (物理地址 0xdeb16c000)   present=True
+</div>
+
+<!-- ── Hop 1 ──────────────────────────────────────── -->
+<h2>Hop ①:GPU → pinned —— 不是一次 cudaMemcpy,是两级</h2>
+
+<p>直觉上这一跳就是 <code>cudaMemcpy(DtoH)</code>。但拿 torch.profiler 抓一次真实传输(复现脚本 <code>kernel_repro.py</code>),看到的事件是:</p>
+
+<div class="asm-box">
+<span class="asm-hl">void (anonymous namespace)::multi_layer_block_transfer_kernel&lt;uint4, false, (GPUKVFormat)3&gt;(
+    MemoryObj4&lt;uint4&gt;, uint4**, long const*, int, PageBufferShapeDesc, int, int)
+    (calls=1, cuda_time=10us)</span>
+cudaMemcpyAsync                  (calls=1)
+Memcpy DtoH (Device -&gt; Pinned)   (calls=1, cuda_time=2us)
+</div>
+
+<p>两级,各有分工:</p>
+
+<table>
+<tr><th>阶段</th><th>观测到的名字</th><th>执行者</th><th>干什么</th></tr>
+<tr><td>A</td><td><code>multi_layer_block_transfer_kernel</code></td><td><strong>SM 计算 kernel</strong></td><td>从几十个<strong>按层分开的 KV tensor</strong> 里,按 block_ids 把碎片 gather 成一个连续暂存块(格式 <code>NL_X_NB_BS_HS</code>,MLA 布局)</td></tr>
+<tr><td>B</td><td><code>cudaMemcpyAsync</code> → <code>Memcpy DtoH (Device -&gt; Pinned)</code></td><td><strong>copy engine</strong></td><td>暂存块 → pinned 主机页,直达 DMA,无 bounce</td></tr>
+</table>
+
+<p>为什么必须两级:vLLM 的 KV 池是<strong>几十个 tensor</strong>(每层一个),而落盘要的是<strong>一个连续块</strong>。<code>cudaMemcpy</code> 只会连续到连续,做不了跨 tensor 聚合——所以 LMCache 先用 SM kernel 做 gather(load 时反向 scatter),拼成连续块之后才轮到 copy engine。</p>
+
+<div class="student-note">
+代码侧对应 LMCache MP server 的 <code>gpu_transfer.py</code>:<code>lmc_ops.multi_layer_block_kv_transfer(...)</code> 之后紧跟 <code>lmcache_memcpy_async_d2h(...)</code>。<strong>pinned 还有个隐藏作用</strong>:若目标是 pageable 内存,CUDA runtime 会先拷进内部 pinned bounce buffer 再 DMA(多一次拷贝);目标是 pinned 页才是"一段直达"。kineto 标签 <code>Device -&gt; Pinned</code> 正是证据。
+</div>
+
+<p>实测这一跳 <strong>54.8 GiB/s</strong>——DRAM 内部搬家,不走任何总线。</p>
+
+<!-- ── Hop 2 ──────────────────────────────────────── -->
+<h2>Hop ②:pinned → SSD —— NVMe 控制器接手,CPU 只下命令</h2>
+
+<p>这是最关乎"零拷贝"的一跳。开了 <code>O_DIRECT</code> 之后:</p>
+
+<div class="pipe-flow">
+  <div class="pipe-step">
+    <div class="ps-label">CPU(server 线程)</div>
+    <div class="ps-desc">发一条 pwritev<br>源 PFN / 目的 LBA / 长度</div>
+  </div>
+  <div class="pipe-arrow">→</div>
+  <div class="pipe-step">
+    <div class="ps-label">NVMe 控制器</div>
+    <div class="ps-desc">自己的 DMA 引擎<br>直接从 PFN 读数据写 LBA</div>
+  </div>
+  <div class="pipe-arrow">→</div>
+  <div class="pipe-step">
+    <div class="ps-label">CPU</div>
+    <div class="ps-desc">转头干别的<br>不参与搬运</div>
+  </div>
+</div>
+
+<p>实测写 <strong>7.84 GiB/s</strong>、读 <strong>9.50 GiB/s</strong>。对照老路(buffered):CPU 亲手把数据从 pinned 页<strong>再抄一遍到内核 page cache</strong>(多一次 CPU 拷贝),写只剩 2.84 GiB/s,读更是只有 0.70 GiB/s。O_DIRECT 把 CPU 从"搬运工"降级成"调度员"。</p>
+
+<div class="example-block">
+  <div class="example-hd">
+    <span class="example-title">插曲:O_DIRECT 差点没生效</span>
+    <span class="example-badge badge-gap">对齐坑</span>
+  </div>
+  <div class="example-body">
+    <p>fs adapter 的 <code>use_odirect</code> 默认关闭,打开后日志却报:</p>
+    <div class="asm-box compact no-tag" style="margin: .8rem 0;">
+Cannot use O_DIRECT for writing size 16480832, not aligned to block size 4096.
+    </div>
+    <p>O_DIRECT 有三条硬规矩:<strong>缓冲地址、文件偏移、传输长度都必须是磁盘块(4 KiB)的整数倍</strong>——DMA 按整托盘运输,不收零头。而 KV 对象是 16480832 字节,模 4096 余 2624。</p>
+    <p>解法是物流常规操作——<strong>垫满一个托盘再运</strong>:申请页对齐的临时缓冲区,对象拷进去,尾部补 1472 个零字节凑整盘,NVMe 整盘运走;读回按真实长度裁掉垫料。代价一次 CPU memcpy(≈1.5ms),换来 NVMe DMA(≈2ms),远好于 page-cache 老路(≈23.6ms)。</p>
+    <p>盘上证据:真实对象 16480832 字节,12 个数据文件每个都是 <strong>16482304</strong> 字节(= 对象 + 1472 padding)。</p>
+  </div>
+</div>
+
+<!-- ── 回程 ───────────────────────────────────────── -->
+<h2>回程:完全对称</h2>
+
+<p>SSD 命中时倒放:<code>preadv</code> 一条命令,NVMe DMA 把 LBA 数据直接塞回那几个 PFN 页帧(9.50 GiB/s),SM kernel scatter 回各层 tensor(CE memcpy 55 GiB/s),prefill 不用重算。实测同样本二次运行,首条请求 16.28s → 12.20s。</p>
+
+<!-- ── 数字总表 ───────────────────────────────────── -->
+<h2>数字总表(1 GiB 每跳实测)</h2>
+
+<table class="bw-table">
+<tr><th>跳</th><th>路径</th><th>带宽</th></tr>
+<tr><td>① GPU→pinned</td><td>SM gather + CE memcpy</td><td>54.8 GiB/s</td></tr>
+<tr><td>② pinned→SSD</td><td>buffered 写</td><td>2.84 GiB/s</td></tr>
+<tr><td>② pinned→SSD</td><td><strong>O_DIRECT 写</strong></td><td><strong>7.84 GiB/s</strong></td></tr>
+<tr><td>③ SSD→pinned</td><td>buffered 读</td><td>0.70 GiB/s</td></tr>
+<tr><td>③ SSD→pinned</td><td><strong>O_DIRECT 读</strong></td><td><strong>9.50 GiB/s</strong></td></tr>
+<tr><td>④ pinned→GPU</td><td>CE memcpy</td><td>55.0 GiB/s</td></tr>
+</table>
+
+<!-- ── 边界 ───────────────────────────────────────── -->
+<h2>边界:为什么没有"真·GPU 直通 SSD"</h2>
+
+<p>GDS(GPU Direct Storage)才是字面意义的 GPU→SSD zero-copy。实测 GB10 上此路不通:<code>cuFileDriverOpen</code> 能成功,但平台探测判定 "GDS not supported"——</p>
+
+<table>
+<tr><th>检查项</th><th>结果</th></tr>
+<tr><td>宿主 <code>nvidia_fs</code> 内核模块</td><td>✅ v2.20.5 已加载,版本满足</td></tr>
+<tr><td><code>GPU_DIRECT_RDMA_SUPPORTED</code></td><td>❌ = 0</td></tr>
+<tr><td>PCIe BAR(NVML 查询)</td><td>❌ 拿不到(UMA 无独立 BAR)</td></tr>
+<tr><td><code>pci_p2pdma</code></td><td>❌ 不支持</td></tr>
+</table>
+
+<p>UMA SoC 的 GPU 没有独立 PCIe BAR / P2P DMA 寻址能力,GPU↔NVMe 直通 DMA 在架构上不存在。所以 <strong>GPU →(55 GiB/s DMA)→ pinned →(8–9.5 GiB/s NVMe DMA)→ SSD、CPU 零拷贝</strong>,就是 GB10 的物理最优路径。</p>
+
+<!-- ── 一句话版 ───────────────────────────────────── -->
+<h2>一句话版(给普通学生)</h2>
+
+<div class="student-note">
+GPU 和 SSD 都不会"自己找路":GPU 厂内编号、SSD 冷库货位,互相不认识。中间必须有个"锁定专区"(pinned 页)交接——GPU 的传送带(SM kernel 拼箱 + copy engine)把货放过去,NVMe 的传送带(DMA)再取走送冷库。<strong>CPU 全程只在旁边开单子,一箱货都没亲手搬。</strong>
+</div>
+
+<!-- ── 复现方法 ───────────────────────────────────── -->
+<h2>复现方法</h2>
+
+<table>
+<tr><th>脚本</th><th>内容</th></tr>
+<tr><td><code>scripts/addr_trace.py</code></td><td>地址级取证(GPU VA / pinned VA / pagemap PFN / FIEMAP LBA + 各跳带宽)</td></tr>
+<tr><td><code>scripts/kernel_repro.py</code></td><td>torch.profiler 抓 <code>multi_layer_block_transfer_kernel</code> + <code>cudaMemcpyAsync</code> 的最小复现</td></tr>
+<tr><td><code>scripts/hop_bench.py</code></td><td>1 GiB 四跳带宽基准(buffered vs O_DIRECT)</td></tr>
+<tr><td><code>scripts/gds_smoke.cu</code></td><td>cuFile API 冒烟(GDS 可行性判定的原始证据)</td></tr>
+</table>
+
+<p>部署侧:LMCache <code>LMCacheMPConnector</code> + 每节点 <code>lmcache server</code>(<code>--l2-adapter '{"type":"fs","base_path":...,"use_odirect":true}'</code> + padding 补丁),完整配置与验证记录见 <code>ds4-lmcache</code> 仓库的 README。</p>
+
+</body>
+</html>

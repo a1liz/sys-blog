@@ -29,7 +29,7 @@ templates/             # 文章模板
 （暂无文章）
 
 ### Storage
-（暂无文章）
+- [一块 KV Cache 的旅程:DGX Spark 上 GPU → pinned → SSD 的数据路径全取证](posts/storage/dgx-spark-kv-offload-data-path.md) — pagemap/FIEMAP/torch.profiler 逐跳取证 KV offload 数据路径;GPU↔DRAM 55 GiB/s,O_DIRECT 把 pinned↔NVMe 提升 3–13 倍
 
 ### Containers
 （暂无文章）
@@ -48,6 +48,8 @@ templates/             # 文章模板
 
 ## 最近更新
 
+- 2026-07-19: [一块 KV Cache 的旅程:DGX Spark 上 GPU → pinned → SSD 的数据路径全取证](posts/storage/dgx-spark-kv-offload-data-path.md)
+
 - 2026-06-29: [为什么你的程序跑得慢？——用 perf + Pin ILP 给 SPEC CPU 2017 做一次「全身体检」](posts/performance/spec-bottleneck-analysis.md)
 
 ## 使用方式
@@ -58,4 +60,9 @@ cp templates/post-template.md posts/<category>/<slug>.md
 
 # 本地预览（后续可接入 Hugo / mdBook 等）
 # hugo serve 或 mdbook serve
+
+# 直接预览 HTML 版（docs/html/）
+python3 -m http.server 8080 -d docs/html/
+# 从本地机器 SSH 隧道访问
+ssh -L 8080:127.0.0.1:8080 -N user@<server>
 ```
