@@ -111,6 +111,18 @@
 
   <div class="post-card">
     <div class="post-card-left">
+      <a href="posts/dgx-spark-kv-offload-data-path.html" class="post-title">一块 KV Cache 的旅程:DGX Spark 上 GPU → pinned → SSD 的数据路径全取证</a>
+      <span class="post-summary">
+        用 pagemap、FIEMAP、torch.profiler 逐跳取证 KV offload 数据路径:GPU 显存 VA → pinned 页帧 → NVMe LBA。实测 GPU↔DRAM copy engine 约 55 GiB/s,pinned↔NVMe 的 O_DIRECT 达 7.8–9.5 GiB/s(buffered 的 3–13 倍),并定位 LMCache 真实搬运路径是「SM gather kernel + cudaMemcpyAsync」两级。
+      </span>
+    </div>
+    <div class="post-meta">
+      <span class="post-tag">storage</span>
+    </div>
+  </div>
+
+  <div class="post-card">
+    <div class="post-card-left">
       <a href="posts/spec-bottleneck-analysis.html" class="post-title">为什么你的程序跑得慢？——用 perf + Pin ILP 给 SPEC CPU 2017 做一次「全身体检」</a>
       <span class="post-summary">
         对 SPEC 2017 全部 20 个 benchmark 进行 perf+Pin 交叉分析，将瓶颈分为 DEPENDENCY（依赖链）、MEMORY（缓存）和 FRONTEND（分支）。通过 perlbench、bwaves、omnetpp 等案例，用汇编级代码解释每种瓶颈的物理成因。
