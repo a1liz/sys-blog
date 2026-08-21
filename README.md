@@ -23,7 +23,7 @@ templates/             # 文章模板
 ## 文章索引
 
 ### Linux
-（暂无文章）
+- [给 Linux 内核做基准测试：Kernel Multi-Bench 的 Workload 图鉴与实战](posts/linux/kmb-workload-overview.md) — reboot 驱动的内核基准流水线；三大 MM 战场的 workload 解析与 8C/15G VM 适配实测
 
 ### Networking
 （暂无文章）
@@ -48,6 +48,7 @@ templates/             # 文章模板
 
 ## 最近更新
 
+- 2026-08-21: [给 Linux 内核做基准测试：Kernel Multi-Bench 的 Workload 图鉴与实战](posts/linux/kmb-workload-overview.md)
 - 2026-06-29: [为什么你的程序跑得慢？——用 perf + Pin ILP 给 SPEC CPU 2017 做一次「全身体检」](posts/performance/spec-bottleneck-analysis.md)
 
 ## 使用方式

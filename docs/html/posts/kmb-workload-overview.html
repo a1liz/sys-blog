@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>给 Linux 内核做基准测试：KMB Workload 图鉴 — ASM Blog</title>
+<link rel="stylesheet" href="../style.css">
+<style>
+  table.wl { width: 100%; border-collapse: collapse; margin: 1.2rem 0; }
+  table.wl th {
+    background: var(--surface-hi); text-align: left; padding: 0.6rem 1rem;
+    font-weight: 600; font-size: 0.85rem; color: var(--text-hi);
+    border-bottom: 2px solid var(--border-hi);
+  }
+  table.wl td {
+    padding: 0.5rem 1rem; border-bottom: 1px solid var(--border);
+    font-size: 0.9rem; vertical-align: top;
+  }
+  table.wl tr:hover td { background: var(--surface); }
+  table.wl code { font-family: var(--font-mono); font-size: 0.82rem; color: var(--accent-glow); }
+  .flow {
+    background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 1.2rem 1.4rem; margin: 1rem 0;
+    overflow-x: auto;
+  }
+  .flow pre { margin: 0; font-family: var(--font-mono); font-size: 0.88rem; line-height: 1.65; color: var(--text); }
+  .takeaway {
+    border-left: 3px solid var(--accent); background: var(--surface);
+    padding: 0.8rem 1.2rem; margin: 1.4rem 0; border-radius: 0 var(--radius) var(--radius) 0;
+    font-size: 0.92rem; color: var(--text-hi);
+  }
+  .takeaway strong { color: var(--accent-glow); }
+  .num { font-variant-numeric: tabular-nums; }
+  .suite-tag {
+    display: inline-block; font-family: var(--font-mono); font-size: 0.72rem;
+    color: var(--green); background: var(--green-dim);
+    padding: 0.1rem 0.5rem; border-radius: 4px; margin-left: 0.5rem;
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="../index.html" class="brand">ASM Blog</a>
+  <a href="spec-bottleneck-analysis.html">SPEC 瓶颈体检</a>
+  <a href="address-space.html">地址空间</a>
+  <a href="kmb-workload-overview.html" class="active">KMB Workload</a>
+</nav>
+
+<h1>给 Linux 内核做基准测试：Kernel Multi-Bench 的 Workload 图鉴与实战</h1>
+
+<p>内核子系统的改动（内存管理、调度器、块层）效果往往只有几个百分点，而测试环境的噪声——上次测试残留的页缓存、温度导致的降频、系统后台任务——轻松就能盖过真实差异。本文解析 <strong>Kernel Multi-Bench（KMB）</strong>如何把「重启」变成流水线的基本单元，逐套件剖析其预设 workload 覆盖的内核 MM 三大战场，并在 8C/15G 虚拟机上完成适配与首轮基线实测。</p>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>1. 问题：怎么在多个内核之间做公平的性能对比？</h2>
+
+<p>常见的野路子是在同一台机器上换内核重启，手动跑几个测试。问题在于：</p>
+<ul>
+  <li><strong>交叉污染</strong>：上一个测试留下的页缓存、碎片化的内存、被降频的 CPU，都会渗进下一个测试；</li>
+  <li><strong>热漂移</strong>：连续压测导致机器发热降频，越跑越慢；</li>
+  <li><strong>流程不可复现</strong>：手动编排容易漏步骤，测出来的数字没法对别人解释。</li>
+</ul>
+
+<p>KMB 的答案是：<strong>每个测试脚本独占一次干净开机</strong>，跑完就重启，由 systemd + grubby 全自动驱动，直到所有脚本在所有内核上跑完。</p>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>2. 方法：一个 reboot 驱动的测试流水线</h2>
+
+<div class="flow">
+<pre>kmultibench run [inventory] &lt;suite-dir&gt; &lt;run-name&gt;
+   │
+   ├─ bench-run        解析参数，无清单时自动发现 /boot/ 下的内核
+   ├─ bench-preflight  校验清单，跑 .prepare.sh 准备依赖
+   ├─ bench-start      保存状态，启用 systemd 服务，重启进第 1 个内核
+   │
+   └─ [每次开机，systemd 调 kmultibench next]
+        bench-next     → 恢复状态，跑下一个脚本，tee 到日志，推进游标，重启
+                       → 脚本跑完 → 切下一个内核再重启
+                       → 内核跑完 → 清理退出</pre>
+</div>
+
+<p>几个值得注意的设计决策：</p>
+<ul>
+  <li><strong>一脚本一重启</strong>：重启是最彻底的隔离——页缓存清空、碎片整理、频率复位。脚本甚至可以随意改内核 cmdline、切 sysfs 开关、加载需要重启的模块，因为反正每次开机都是新的。</li>
+  <li><strong>状态序列化到 <code>$KMB_ENV</code></strong>，每次开机重新 source，整个流水线抗重启。</li>
+  <li><strong>脚本自包含可直接跑</strong>：每个测试脚本都能脱离框架单独执行，开发和调试不需要跑整个循环。</li>
+  <li>systemd unit 用 <code>ConditionPathExists=/kmultibench.runner</code> 保证只在 benchmark 进行中激活，<code>Type=idle</code> 等其他启动任务完成再开跑。</li>
+</ul>
+
+<div class="takeaway">
+  <strong>重启次数 = 1（进入第一个内核）+ Σ(每个内核的脚本数)</strong>。单内核 × 4 脚本 = 5 次重启。代价是吞吐量低——用干净换可信。限制：内核 panic 不处理，机器挂住需要人工干预。
+</div>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>3. Workload 图鉴：三套件覆盖内核 MM 三大战场</h2>
+
+<h3>3.1 匿名内存压力 <span class="suite-tag">anon-memory-pressure · 2G/12C</span></h3>
+
+<p>为 2G 内存小机器设计，<strong>所有工作集都故意超过物理内存</strong>，逼出持续的回收/换出流量。</p>
+
+<table class="wl">
+<tr><th>脚本</th><th>负载</th><th>模拟场景</th><th>资源配置</th></tr>
+<tr><td><code>10-blk-zram-4k-j12</code></td><td>内核编译（tinyconfig，-j12，3 轮）</td><td>开发者编译负载；THP 全关作 4K 基线</td><td>ZRAM swap；THP=never</td></tr>
+<tr><td><code>11-blk-zram-64k-j12</code></td><td>同上</td><td><strong>mTHP 64K 大页对照</strong>——测大页收益</td><td>ZRAM swap；THP 64K=always</td></tr>
+<tr><td><code>20-redis</code></td><td>valkey GET 压测（300 万 key ≈ 3G）+ bgsave</td><td>内存数据库/缓存服务，数据集超内存压出 swap 抖动</td><td>cgroup 隔离；zswap 关</td></tr>
+<tr><td><code>30-vm-scala-global</code></td><td>usemem 2 线程 × 1536M（共 3G）</td><td>纯匿名页分配/触碰压力</td><td>cgroup max；ZRAM；THP 64K=always</td></tr>
+</table>
+
+<p>10 和 11 是一组对照实验：同一负载只在 THP 配置上差一步，3 轮取均值——这正是 KMB「每脚本一重启」设计的典型用法。</p>
+
+<h3>3.2 Swap 介质对比 <span class="suite-tag">anon-usemem-swap · 64G/32C</span></h3>
+
+<p>64G 裸机专用。核心思路是用 <code>memmap=</code> 内核参数从物理内存里挖 48G 出来伪装成 PMEM 设备（模拟 CXL/分层内存），当作 swap 用；再用 BRD（内存盘）做对照组，分离「swap 介质」这个变量。</p>
+
+<table class="wl">
+<tr><th>脚本</th><th>负载</th><th>模拟场景</th></tr>
+<tr><td><code>10-prepare-pmem</code></td><td>grubby 加 memmap，挖 48G 伪 PMEM</td><td>建立设备（靠框架的重启生效）</td></tr>
+<tr><td><code>20/30-usemem-pmem-*</code></td><td>单线程 52G / 32 线程 × 1536M</td><td>线性/并行冷数据换入换出</td></tr>
+<tr><td><code>50/60-usemem-brd-*</code></td><td>同上，swap 换成 BRD</td><td>swap 后端介质对照</td></tr>
+<tr><td><code>70-usemem-brd-36t-rand</code></td><td>36 线程 + <strong>随机访问</strong>（27G）</td><td>非顺序页访问换页，更接近真实负载</td></tr>
+</table>
+
+<h3>3.3 文件页回收 <span class="suite-tag">mongodb-ycsb · 12G/16C</span></h3>
+
+<p>与前两套的匿名页互补，打的是<strong>文件页 LRU / refault</strong> 路径。配比设计相当讲究：</p>
+
+<ul>
+  <li>MongoDB 跑在 docker 里，memory cap 12G；</li>
+  <li><strong>WiredTiger 缓存被压到 cap 的 1/4</strong>（默认 1/2）——让热集留在内核页缓存而不是 mongod 的匿名内存里，确保压到的是内核而不是数据库自己的缓存；</li>
+  <li>1100 万条记录（~12.5G 磁盘）&gt; 页缓存预算（~8.5G）——内核必须边服务边回收；</li>
+  <li>每设备 IOPS 限 5 万——防止纯 IO 打满掩盖 MM 行为；</li>
+  <li><strong>固定 op 数而非固定时长</strong>——<code>workingset_refault_*</code> 计数随时间亚线性增长（shadow entry 本身也会被回收），等量工作才让 IO 量和 refault 计数跨轮可比。</li>
+</ul>
+
+<table class="wl">
+<tr><th>脚本</th><th>YCSB 负载</th><th>模拟场景</th></tr>
+<tr><td><code>10-workloada</code></td><td>50/50 读写</td><td>混合交易（订单）</td></tr>
+<tr><td><code>20-workloadb</code></td><td>95/5</td><td>读多写少（内容站）</td></tr>
+<tr><td><code>30-workloadc</code></td><td>100% 读</td><td>纯读缓存（用户画像）</td></tr>
+<tr><td><code>40-workloadd</code></td><td>95 读 + 5 插入</td><td>读最新（feed/时间线）</td></tr>
+<tr><td><code>50-workloade</code></td><td>95 扫描 + 5 插入</td><td>短范围扫描（列表页）</td></tr>
+<tr><td><code>60-workloadf</code></td><td>读-改-写</td><td>事务型（计数器/库存）</td></tr>
+</table>
+
+<h3>3.4 一页速览</h3>
+
+<table class="wl">
+<tr><th>维度</th><th>anon-pressure</th><th>usemem-swap</th><th>mongodb-ycsb</th></tr>
+<tr><td>内存类型</td><td>匿名页</td><td>匿名页</td><td><strong>文件页</strong></td></tr>
+<tr><td>规模</td><td class="num">2G / 12C</td><td class="num">64G / 32C</td><td class="num">12G / 16C</td></tr>
+<tr><td>swap</td><td>ZRAM</td><td>pmem / BRD</td><td>关闭（靠 cap 逼回收）</td></tr>
+<tr><td>内核观察点</td><td>mTHP、zram、回收延迟</td><td>swap 路径、多线程缺页</td><td>LRU/refault、workingset</td></tr>
+</table>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>4. 实战：在 8C/15G 虚拟机上落地</h2>
+
+<p>预设套件是按特定硬件规格调好配比的（工作集 ≈ 1.3~1.5 × 可用内存），换机器不能直接跑，要<strong>等比缩放保持设计意图</strong>：</p>
+
+<table class="wl">
+<tr><th>参数</th><th>原值（2G/12C）</th><th>适配值（15G/8C）</th></tr>
+<tr><td>编译并发</td><td><code>-j 12</code></td><td><code>-j 8</code></td></tr>
+<tr><td>valkey 数据集</td><td>300 万 key（3G）</td><td>1200 万 key（目标 12G）</td></tr>
+<tr><td>usemem</td><td>2 × 1536M</td><td>2 × 10G</td></tr>
+</table>
+
+<h3>4.1 踩过的坑</h3>
+
+<p>Ubuntu 24.04 上跑这套东西，一天之内能踩的坑基本踩全了：</p>
+
+<ol>
+  <li><strong>grubby 缺失</strong>：Ubuntu 默认不带，<code>apt install grubby</code> 解决——这是 KMB 切内核的根基。</li>
+  <li><strong><code>make -C</code> 死循环</strong>：<code>furniture/kmb.mk</code> 用相对路径向上找 <code>.kmb-root</code>，<code>dirname .</code> 还是 <code>.</code>，永远到不了终止条件。在仓库根跑 <code>make prepare</code> 没事，<code>make -C furniture/xxx</code> 必卡死。教训：<strong>聚合 prepare 按目标拆开跑</strong>——<code>make usemem</code> 用普通用户，<code>sudo make valkey-prepare</code> 用 root，避免 root 属主污染 git 目录。</li>
+  <li><strong>polkit 密码轰炸</strong>：非 root 手动跑脚本时，<code>stabilize_performance</code> 停 systemd timer 每停一个弹一次密码。测试脚本就是设计成 root 跑的，别挣扎。</li>
+  <li><strong>systemd 托管的 valkey 抢端口</strong>：发行版包装的 valkey-server 会开机自启占 6379，<code>systemctl disable --now valkey</code> 之后 framework 自己管理的实例才能正常起停。</li>
+  <li><strong>大数据集加载慢于框架假设</strong>：<code>bench.sh</code> 起 server 后只 <code>sleep 3</code> 就开始压测，3G 的 rdb 够用，12G 的要加载一分钟——压测全打在 <code>LOADING</code> 状态上，rps 全零。修法是轮询 <code>info persistence</code> 等 <code>loading:0</code>。</li>
+</ol>
+
+<h3>4.2 首轮基线（单内核 7.0.0-30-generic）</h3>
+
+<table class="wl">
+<tr><th>负载</th><th>结果</th></tr>
+<tr><td>内核编译 · THP=never</td><td class="num">38.03 / 44.28 / 39.43 s（均值 40.58s）</td></tr>
+<tr><td>内核编译 · mTHP 64K</td><td class="num">36.97 / 38.60 / 41.32 s（均值 38.96s，<strong>快约 4%</strong>）</td></tr>
+<tr><td>usemem 2×10G</td><td class="num">22.13s · 189% CPU · 峰值 RSS 7.6G</td></tr>
+<tr><td>valkey 12.6M key</td><td class="num">冷启动 12–19k rps（24ms 延迟）；预热后瞬时 457k rps；bgsave 33 分钟</td></tr>
+</table>
+
+<p>两个值得展开的现象：</p>
+
+<p><strong>mTHP 64K 的正向收益</strong>：编译负载 CPU 利用率只有 520~580%（8 vCPU），说明瓶颈在内存路径而非 CPU 饱和——正是大页起作用的场景。4% 的差距方向符合预期（更少的 TLB miss 和缺页次数），但单内核单轮 run 且在 VM 里，只能当趋势参考，真正的结论要等双内核对比。</p>
+
+<p><strong>valkey 的冷热 30 倍差距</strong>：数据集实际占 16.2G（每 key 约 1.35KB，按 1KB 估的元数据开销漏了），略超 15G 物理内存。于是前半段 GET 全在触发 swap-in 缺页，延迟 24ms、rps 12–19k；工作集逐渐 fault 回内存后，瞬时 rps 爬到 457k。这个 30 倍的差距本身就是一个非常直观的内存局部性教材——也说明<strong>数据集配比是这个测试的灵魂</strong>，差一点就测到完全不同的东西。</p>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>5. 结语</h2>
+
+<p>KMB 的价值不在某个具体负载，而在它把「可信的内核对比」变成了一条无人值守的流水线：每个数字背后都是一次干净的开机、固定的环境 stabilizing、可复现的脚本。三套预设 workload 正好覆盖内核 MM 的三大战场，配比设计（工作集超内存比例、WT cache 压缩、IOPS 限速）都值得抄作业。</p>
+
+<p>下一步：装好 docker 跑 mongodb-ycsb 套件补齐文件页场景，然后编译一个打了自己补丁的内核进来，单内核基线就升级成真正的 A/B 对比——那才是这套框架完全体。</p>
+
+<footer>ASM Blog — Sys 技术细节知识库</footer>
+</body>
+</html>
